@@ -9,14 +9,14 @@
  *  • No scores, rankings, or elimination info shown to players
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { gamesApi, challengesApi } from '../lib/api';
 import { getSocket, joinGameRoom } from '../lib/socket';
 import CountdownTimer from '../components/shared/CountdownTimer';
-import { Game, GameDay, Challenge, Announcement, ChallengeAttempt } from '../types';
-import { formatDistanceToNow, format } from 'date-fns';
+import { Game, GameDay, Challenge, ChallengeAttempt } from '../types';
+import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -27,6 +27,14 @@ const DAY_NAMES_LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 
 function fmtTime(iso: string): string {
   try { return format(new Date(iso), 'h:mm a'); }
   catch { return '—'; }
+}
+
+function formatCountdown(targetIso: string, nowMs: number): string {
+  const totalSeconds = Math.max(0, Math.ceil((new Date(targetIso).getTime() - nowMs) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map(value => String(value).padStart(2, '0')).join(':');
 }
 
 /** Map GameDay.status + attempt status → a player-visible day state */
@@ -86,33 +94,40 @@ export default function DashboardPage() {
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   // Map challengeId → my attempt for that challenge
   const [attemptMap, setAttemptMap] = useState<Record<string, ChallengeAttempt>>({});
-  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [loading, setLoading] = useState(true);
-  const [now, setNow] = useState(() => new Date());
+  const [serverTimeMs, setServerTimeMs] = useState<number | null>(null);
+  const [, setClockTick] = useState(0);
+  const clockAnchor = useRef<number | null>(null);
 
-  // Keep "now" updated every 30s so live status updates without full reload
+  // The server response is the anchor; performance.now() keeps the display ticking
+  // without consulting the player's wall clock after the anchor is established.
   useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1_000);
+    const id = setInterval(() => setClockTick(tick => tick + 1), 1_000);
     return () => clearInterval(id);
   }, []);
 
+  const nowMs = serverTimeMs === null || clockAnchor.current === null
+    ? null
+    : serverTimeMs + (performance.now() - clockAnchor.current);
+
   const loadDashboard = useCallback(async () => {
     try {
-      const gamesRes = await gamesApi.getAll();
+      const [gamesRes, timeRes] = await Promise.all([gamesApi.getAll(), gamesApi.getServerTime()]);
+      const serverNow = new Date(timeRes.data.serverNow).getTime();
+      if (!Number.isNaN(serverNow)) {
+        clockAnchor.current = performance.now();
+        setServerTimeMs(serverNow);
+      }
       const games: Game[] = gamesRes.data.games || [];
       const activeGame = games.find(g => g.status === 'ACTIVE');
       if (!activeGame) { setLoading(false); return; }
       setGame(activeGame);
 
-      const [daysRes, annRes] = await Promise.all([
-        gamesApi.getDays(activeGame._id),
-        gamesApi.getAnnouncements(activeGame._id).catch(() => ({ data: { announcements: [] } })),
-      ]);
+      const daysRes = await gamesApi.getDays(activeGame._id);
 
       const gameDays: GameDay[] = (daysRes.data.days || [])
         .sort((a: GameDay, b: GameDay) => a.dayNumber - b.dayNumber);
       setDays(gameDays);
-      setAnnouncements((annRes.data.announcements || []).slice(0, 5));
 
       // Load challenges for all days + attempts for each
       const challRes = await challengesApi.getAll({ gameId: activeGame._id }).catch(() => ({ data: { challenges: [] } }));
@@ -150,14 +165,9 @@ export default function DashboardPage() {
     if (!socket) return;
     joinGameRoom(game._id);
     socket.on('challenge:opened', () => { toast.success('A challenge is now open!'); loadDashboard(); });
-    socket.on('announcement', (ann: Announcement) => {
-      toast(ann.title, { icon: '📢' });
-      setAnnouncements(prev => [ann, ...prev].slice(0, 5));
-    });
     socket.on('game:status', loadDashboard);
     return () => {
       socket.off('challenge:opened');
-      socket.off('announcement');
       socket.off('game:status');
     };
   }, [game, loadDashboard]);
@@ -176,14 +186,14 @@ export default function DashboardPage() {
   const computeDayState = (day: GameDay): DayState => {
     const start = new Date(day.challengeStartTime).getTime();
     const end = new Date(day.challengeEndTime).getTime();
-    const current = now.getTime();
+    const current = nowMs ?? 0;
     const ch = challengeForDay(day.dayNumber);
     if (ch) {
       const att = attemptForChallenge(ch._id);
       if (att?.status === 'COMPLETED') return 'COMPLETED';
       if (att?.status === 'TIME_EXPIRED') return 'TIME_EXPIRED';
       if (att?.status === 'IN_PROGRESS') {
-        if (current < end && new Date(att.deadlineAt) > now) return 'IN_PROGRESS';
+        if (current < end && new Date(att.deadlineAt).getTime() > current) return 'IN_PROGRESS';
         return 'TIME_EXPIRED';
       }
     }
@@ -193,15 +203,16 @@ export default function DashboardPage() {
     return ch?.isActive ? 'OPEN' : 'UPCOMING';
   };
 
-  const todayDay = days.find(d => d.dayNumber === game?.currentDay)
-    ?? days.find(d => d.status === 'OPEN')
-    ?? days.find(d => !['COMPLETED', 'RESULTS'].includes(d.status));
+  const todayDay = days.find(day => {
+    if (nowMs === null) return false;
+    return nowMs >= new Date(day.challengeStartTime).getTime()
+      && nowMs < new Date(day.challengeEndTime).getTime();
+  })
+    ?? days.find(day => nowMs !== null && new Date(day.challengeStartTime).getTime() > nowMs)
+    ?? days[days.length - 1];
   const todayChallenge = todayDay ? challengeForDay(todayDay.dayNumber) : undefined;
   const todayAttempt = todayChallenge ? attemptForChallenge(todayChallenge._id) : undefined;
   const todayState = todayDay ? computeDayState(todayDay) : null;
-
-  const completedDays = days.filter(d => ['COMPLETED', 'TIME_EXPIRED'].includes(computeDayState(d))).length;
-  const totalDays = days.length || 7;
 
   const groupLink = game?.groupLink || import.meta.env.VITE_GROUP_LINK || '#';
 
@@ -249,13 +260,6 @@ export default function DashboardPage() {
             </h1>
             <p className="text-gray-600 text-sm font-mono mt-0.5">{user?.playerTag}</p>
           </div>
-          {game && (
-            <div className="text-right shrink-0">
-              <p className="text-xs text-gray-500 uppercase tracking-wider">Weekly Challenges</p>
-              <p className="text-2xl font-bold text-white">{completedDays}<span className="text-gray-600 text-sm">/{totalDays}</span></p>
-              <p className="text-[10px] text-gray-600 uppercase tracking-wider">completed or locked</p>
-            </div>
-          )}
         </div>
 
         {/* ── No active game ── */}
@@ -280,6 +284,7 @@ export default function DashboardPage() {
               attempt={todayAttempt ?? null}
               state={todayState}
               groupLink={groupLink}
+              nowMs={nowMs}
               onEnter={() => todayChallenge && navigate(`/challenge/${todayChallenge._id}`)}
               onTimerExpire={loadDashboard}
             />
@@ -287,11 +292,11 @@ export default function DashboardPage() {
             {/* ── WEEKLY SCHEDULE ── */}
             <div className="arena-card p-5 space-y-4">
               <div className="flex items-center justify-between">
-                <p className="section-title mb-0">SURVIVAL GAME SCHEDULE</p>
-                <p className="text-xs text-gray-600 font-mono">{game.name}</p>
+                <p className="section-title mb-0">SEVEN DAYS / SURVIVAL SCHEDULE</p>
+                <p className="text-xs text-gray-600 font-mono hidden sm:block">{game.name}</p>
               </div>
 
-              <div className="space-y-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 {Array.from({ length: 7 }, (_, i) => {
                   const dayNum = i + 1;
                   const day = days.find(d => d.dayNumber === dayNum);
@@ -306,50 +311,14 @@ export default function DashboardPage() {
                       day={day}
                       state={state}
                       isSunday={dayNum === 7}
+                      nowMs={nowMs}
+                      isCurrentDay={Boolean(todayDay && day && todayDay._id === day._id)}
                     />
                   );
                 })}
               </div>
 
-              {/* Progress bar */}
-              <div className="pt-2 border-t border-arena-700 space-y-2">
-                <div className="flex items-center justify-between text-xs text-gray-500">
-                  <span>YOUR SURVIVAL PROGRESS</span>
-                  <span>{completedDays} / {totalDays} completed</span>
-                </div>
-                <div className="h-1.5 bg-arena-700 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-cyber-600 to-emerald-500 rounded-full transition-all duration-700"
-                    style={{ width: `${(completedDays / totalDays) * 100}%` }}
-                  />
-                </div>
-              </div>
             </div>
-
-            {/* ── Announcements ── */}
-            {announcements.length > 0 && (
-              <div className="arena-card p-5 space-y-3">
-                <p className="section-title">Announcements</p>
-                {announcements.map(ann => (
-                  <div key={ann._id} className="flex gap-3 py-2.5 border-b border-arena-700 last:border-0">
-                    <span className="text-base shrink-0">
-                      {ann.type === 'CHALLENGE_OPEN' ? '⚡' :
-                        ann.type === 'WARNING' ? '⚠️' :
-                          ann.type === 'GENERAL' ? '📢' : '📣'}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-white text-sm font-semibold">{ann.title}</p>
-                      <p className="text-gray-400 text-xs mt-0.5 leading-relaxed line-clamp-2">{ann.message}</p>
-                      {ann.publishedAt && (
-                        <p className="text-gray-600 text-xs mt-1">
-                          {formatDistanceToNow(new Date(ann.publishedAt), { addSuffix: true })}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
 
             {/* ── Group footer ── */}
             <div className="arena-card p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -379,11 +348,12 @@ interface TodayCardProps {
   attempt: ChallengeAttempt | null;
   state: DayState | null;
   groupLink: string;
+  nowMs: number | null;
   onEnter: () => void;
   onTimerExpire: () => void;
 }
 
-function TodayChallengeCard({ day, challenge, attempt, state, groupLink, onEnter, onTimerExpire }: TodayCardProps) {
+function TodayChallengeCard({ day, challenge, attempt, state, groupLink, nowMs, onEnter, onTimerExpire }: TodayCardProps) {
   if (!day && !challenge) {
     return (
       <div className="arena-card border border-arena-600 p-6 text-center space-y-2">
@@ -471,10 +441,16 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, onEnter
       {/* LOCKED / UPCOMING — not yet open */}
       {(state === 'LOCKED' || state === 'UPCOMING') && day && (
         <div className="bg-arena-900 border border-arena-700 rounded-lg px-4 py-3 text-center space-y-1">
-          <p className="text-gray-500 text-sm">
-            {state === 'LOCKED' ? '🔒 Locked' : `🔒 Locked until ${startTime}`}
-          </p>
-          <p className="text-gray-600 text-xs">Server time controls unlock — device clock has no effect.</p>
+          <p className="text-gray-500 text-sm">🔒 LOCKED</p>
+          {nowMs !== null && (
+            <>
+              <p className="text-[10px] text-gray-600 uppercase tracking-[0.25em] pt-2">Game starts in</p>
+              <p className="font-mono text-3xl sm:text-4xl font-bold tracking-widest text-cyber-300">
+                {formatCountdown(day.challengeStartTime, nowMs)}
+              </p>
+            </>
+          )}
+          <p className="text-gray-600 text-xs">{startTime} – {endTime}</p>
         </div>
       )}
 
@@ -571,42 +547,55 @@ interface WeekDayRowProps {
   day: GameDay | undefined;
   state: DayState;
   isSunday: boolean;
+  nowMs: number | null;
+  isCurrentDay: boolean;
 }
 
-function WeekDayRow({ dayNumber, shortName, longName, day, state, isSunday }: WeekDayRowProps) {
+function WeekDayRow({ dayNumber, shortName, longName, day, state, isSunday, nowMs, isCurrentDay }: WeekDayRowProps) {
   const isExpired = state === 'TIME_EXPIRED';
   const isLive = state === 'IN_PROGRESS' || state === 'OPEN';
 
   return (
-    <div className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors
+    <div className={`flex min-h-[132px] flex-col items-start justify-between gap-3 px-4 py-4 rounded-lg border transition-colors
+      ${isCurrentDay ? 'ring-1 ring-cyber-400/70 shadow-[0_0_24px_rgba(0,180,180,0.12)]' : ''}
       ${state === 'COMPLETED' ? 'bg-emerald-900/10 border-emerald-900' :
         isExpired ? 'bg-amber-900/10 border-amber-900' :
           isLive ? 'bg-cyber-900/15 border-cyber-800' :
             isSunday ? 'bg-gold-900/10 border-gold-900/30' :
               'bg-arena-900/50 border-arena-800'}`}>
 
-      {/* Day number badge */}
-      <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0
+      <div className="flex w-full items-start justify-between gap-2">
+        {/* Day number badge */}
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0
         ${state === 'COMPLETED' ? 'bg-emerald-900 text-emerald-300 border border-emerald-700' :
-          isExpired ? 'bg-amber-900 text-amber-300 border border-amber-700' :
-            isLive ? 'bg-cyber-900 text-cyber-300 border border-cyber-700' :
-              isSunday ? 'bg-gold-700 text-arena-950 border border-gold-500' :
-                'bg-arena-700 text-gray-400 border border-arena-600'}`}>
-        {dayNumber}
+            isExpired ? 'bg-amber-900 text-amber-300 border border-amber-700' :
+              isLive ? 'bg-cyber-900 text-cyber-300 border border-cyber-700' :
+                isSunday ? 'bg-gold-700 text-arena-950 border border-gold-500' :
+                  'bg-arena-700 text-gray-400 border border-arena-600'}`}>
+          {dayNumber}
+        </div>
+
+        {isCurrentDay && <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-cyber-300">Current day</span>}
       </div>
 
       {/* Day name + times */}
-      <div className="flex-1 min-w-0">
+      <div className="w-full min-w-0">
         <div className="flex items-baseline gap-2">
           <span className={`text-sm font-semibold ${state === 'COMPLETED' ? 'text-emerald-300' : isExpired ? 'text-amber-300' : isLive ? 'text-cyber-300' : isSunday ? 'text-gold-300' : 'text-gray-300'}`}>
             {longName}
-            {isSunday && <span className="text-[10px] text-gold-500 ml-1.5 uppercase tracking-wider">Final</span>}
           </span>
         </div>
         {day ? (
-          <p className="text-[11px] text-gray-600 font-mono mt-0.5">
-            {fmtTime(day.challengeStartTime)} – {fmtTime(day.challengeEndTime)}
-          </p>
+          <>
+            <p className="text-[11px] text-gray-600 font-mono mt-1">
+              {fmtTime(day.challengeStartTime)} – {fmtTime(day.challengeEndTime)}
+            </p>
+            {isCurrentDay && state === 'UPCOMING' && nowMs !== null && (
+              <p className="text-[10px] text-cyber-400 font-mono uppercase tracking-wider mt-2">
+                Starts in {formatCountdown(day.challengeStartTime, nowMs)}
+              </p>
+            )}
+          </>
         ) : (
           <p className="text-[11px] text-gray-700 mt-0.5">Schedule TBC</p>
         )}

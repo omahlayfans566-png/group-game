@@ -68,6 +68,12 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response): Promise<v
   }
 });
 
+// GET /api/games/server-time
+// The player dashboard uses this anchor for display-only countdowns.
+router.get('/server-time', authenticate, (_req: AuthRequest, res: Response): void => {
+  res.json({ success: true, serverNow: new Date().toISOString() });
+});
+
 // POST /api/games  (admin only)
 router.post('/', authenticate, requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
   try {

@@ -22,3 +22,23 @@ services:
         value: 7d
       - key: NODE_DNS_OVERRIDE
         value: "false"
+
+  - type: web
+    name: survival-game-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+      - key: VITE_SOCKET_URL
+        sync: false
+      - key: VITE_APP_NAME
+        value: SURVIVAL
+      - key: VITE_GROUP_LINK
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
