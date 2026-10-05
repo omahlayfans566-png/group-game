@@ -74,6 +74,63 @@ router.get('/server-time', authenticate, (_req: AuthRequest, res: Response): voi
   res.json({ success: true, serverNow: new Date().toISOString() });
 });
 
+// GET /api/games/schedule (player-safe schedule and server clock)
+// This remains available when there is no ACTIVE game so the player can still
+// see the seven-day arena. It never includes challenges or puzzle data.
+router.get('/schedule', authenticate, async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const game = await Game.findOne({ status: { $in: ['ACTIVE', 'PAUSED', 'DRAFT'] } })
+      .select('_id name status startDate currentDay groupLink')
+      .sort({ status: 1, createdAt: -1 });
+    const serverNow = new Date();
+    const days = game
+      ? await GameDay.find({ gameId: game._id }).select('-__v').sort({ dayNumber: 1 })
+      : buildFallbackSchedule(serverNow);
+
+    res.json({
+      success: true,
+      serverNow: serverNow.toISOString(),
+      timezone: 'Africa/Lagos',
+      game,
+      days,
+    });
+  } catch (_err) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+function buildFallbackSchedule(serverNow: Date): Array<Record<string, unknown>> {
+  // Lagos is UTC+01:00 year-round. Build the current Monday in Lagos and
+  // serialize each 21:00-21:30 window as an absolute UTC timestamp.
+  const lagosNow = new Date(serverNow.getTime() + 60 * 60 * 1000);
+  const lagosDay = lagosNow.getUTCDay() || 7;
+  const mondayDate = new Date(Date.UTC(
+    lagosNow.getUTCFullYear(),
+    lagosNow.getUTCMonth(),
+    lagosNow.getUTCDate() - lagosDay + 1,
+    20,
+    0,
+  ));
+  const dayNames = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
+
+  return dayNames.map((dayOfWeek, index) => {
+    const start = new Date(mondayDate.getTime() + index * 24 * 60 * 60 * 1000);
+    const end = new Date(start.getTime() + 30 * 60 * 1000);
+    return {
+      _id: `schedule-${index + 1}`,
+      gameId: null,
+      dayNumber: index + 1,
+      dayOfWeek,
+      status: 'UPCOMING',
+      challengeStartTime: start.toISOString(),
+      challengeEndTime: end.toISOString(),
+      eliminationCount: 0,
+      eliminationsProcessed: false,
+      notes: '',
+    };
+  });
+}
+
 // POST /api/games  (admin only)
 router.post('/', authenticate, requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
   try {

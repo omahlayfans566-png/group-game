@@ -65,6 +65,7 @@ export const authApi = {
 export const gamesApi = {
   getAll: () => axiosInstance.get('/games'),
   getServerTime: () => axiosInstance.get('/games/server-time'),
+  getSchedule: () => axiosInstance.get('/games/schedule'),
   getOne: (gameId: string) => axiosInstance.get(`/games/${gameId}`),
   create: (data: Record<string, unknown>) => axiosInstance.post('/games', data),
   update: (gameId: string, data: Record<string, unknown>) =>

@@ -5,7 +5,6 @@
  *  • Prominent current-day challenge card with correct timer behavior
  *  • Personal timer that survives refresh / tab-close (server deadline)
  *  • Global window enforcement on display
- *  • Challenge progress tracker (X / 7 completed)
  *  • No scores, rankings, or elimination info shown to players
  */
 
@@ -16,7 +15,6 @@ import { gamesApi, challengesApi } from '../lib/api';
 import { getSocket, joinGameRoom } from '../lib/socket';
 import CountdownTimer from '../components/shared/CountdownTimer';
 import { Game, GameDay, Challenge, ChallengeAttempt } from '../types';
-import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -25,7 +23,11 @@ const DAY_NAMES_SHORT = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 const DAY_NAMES_LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 function fmtTime(iso: string): string {
-  try { return format(new Date(iso), 'h:mm a'); }
+  try {
+    return new Intl.DateTimeFormat('en-NG', {
+      timeZone: 'Africa/Lagos', hour: 'numeric', minute: '2-digit', hour12: true,
+    }).format(new Date(iso));
+  }
   catch { return '—'; }
 }
 
@@ -77,7 +79,7 @@ function dayStateLabel(s: DayState): string {
     case 'TIME_EXPIRED': return 'TIME EXPIRED';
     case 'IN_PROGRESS': return 'IN PROGRESS';
     case 'OPEN': return 'AVAILABLE';
-    case 'UPCOMING': return 'UPCOMING';
+    case 'UPCOMING': return 'LOCKED';
     case 'CLOSED': return 'CLOSED';
     default: return 'LOCKED';
   }
@@ -90,6 +92,7 @@ export default function DashboardPage() {
   const { user, clearAuth } = useAuthStore();
 
   const [game, setGame] = useState<Game | null>(null);
+  const [scheduleGame, setScheduleGame] = useState<Game | null>(null);
   const [days, setDays] = useState<GameDay[]>([]);
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   // Map challengeId → my attempt for that challenge
@@ -112,22 +115,27 @@ export default function DashboardPage() {
 
   const loadDashboard = useCallback(async () => {
     try {
-      const [gamesRes, timeRes] = await Promise.all([gamesApi.getAll(), gamesApi.getServerTime()]);
-      const serverNow = new Date(timeRes.data.serverNow).getTime();
+      const [gamesRes, scheduleRes] = await Promise.all([gamesApi.getAll(), gamesApi.getSchedule()]);
+      const serverNow = new Date(scheduleRes.data.serverNow).getTime();
       if (!Number.isNaN(serverNow)) {
         clockAnchor.current = performance.now();
         setServerTimeMs(serverNow);
       }
+      setScheduleGame((scheduleRes.data.game || null) as Game | null);
+      setDays((scheduleRes.data.days || []) as GameDay[]);
       const games: Game[] = gamesRes.data.games || [];
       const activeGame = games.find(g => g.status === 'ACTIVE');
-      if (!activeGame) { setLoading(false); return; }
+      if (!activeGame) {
+        setGame(null);
+        setChallenges([]);
+        setAttemptMap({});
+        return;
+      }
       setGame(activeGame);
 
       const daysRes = await gamesApi.getDays(activeGame._id);
-
-      const gameDays: GameDay[] = (daysRes.data.days || [])
-        .sort((a: GameDay, b: GameDay) => a.dayNumber - b.dayNumber);
-      setDays(gameDays);
+      const gameDays: GameDay[] = (daysRes.data.days || []).sort((a: GameDay, b: GameDay) => a.dayNumber - b.dayNumber);
+      setDays(gameDays.length > 0 ? gameDays : (scheduleRes.data.days || []));
 
       // Load challenges for all days + attempts for each
       const challRes = await challengesApi.getAll({ gameId: activeGame._id }).catch(() => ({ data: { challenges: [] } }));
@@ -214,7 +222,8 @@ export default function DashboardPage() {
   const todayAttempt = todayChallenge ? attemptForChallenge(todayChallenge._id) : undefined;
   const todayState = todayDay ? computeDayState(todayDay) : null;
 
-  const groupLink = game?.groupLink || import.meta.env.VITE_GROUP_LINK || '#';
+  const displayGame = game || scheduleGame;
+  const groupLink = displayGame?.groupLink || import.meta.env.VITE_GROUP_LINK || '#';
 
   if (loading) return (
     <div className="min-h-screen bg-arena-950 flex items-center justify-center">
@@ -262,20 +271,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ── No active game ── */}
-        {!game && (
-          <div className="arena-card cyber-border p-10 text-center space-y-3">
-            <p className="text-4xl">🕐</p>
-            <p className="text-gray-300 text-lg font-semibold">No active game right now</p>
-            <p className="text-gray-600 text-sm">Check the group for the next game announcement.</p>
-            <a href={groupLink} target="_blank" rel="noopener noreferrer"
-              className="btn-primary text-sm px-5 py-2.5 inline-flex items-center gap-2 mt-2">
-              <span>💬</span> GO TO THE GROUP
-            </a>
-          </div>
-        )}
-
-        {game && (
+        {(game || days.length > 0) && (
           <>
             {/* ── TODAY'S CHALLENGE CARD ── */}
             <TodayChallengeCard
@@ -293,7 +289,7 @@ export default function DashboardPage() {
             <div className="arena-card p-5 space-y-4">
               <div className="flex items-center justify-between">
                 <p className="section-title mb-0">SEVEN DAYS / SURVIVAL SCHEDULE</p>
-                <p className="text-xs text-gray-600 font-mono hidden sm:block">{game.name}</p>
+                <p className="text-xs text-gray-600 font-mono hidden sm:block">{displayGame?.name || 'SEVEN DAYS ARENA'}</p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -600,6 +596,16 @@ function WeekDayRow({ dayNumber, shortName, longName, day, state, isSunday, nowM
           <p className="text-[11px] text-gray-700 mt-0.5">Schedule TBC</p>
         )}
       </div>
+
+      {(state === 'LOCKED' || state === 'UPCOMING') && (
+        <div className="w-full rounded border border-arena-700/80 bg-arena-950/70 px-3 py-2 space-y-1.5" aria-label="Game hidden until it opens">
+          <p className="text-[9px] uppercase tracking-[0.2em] text-gray-600">Game hidden</p>
+          <div className="space-y-1 opacity-60 blur-[2px]" aria-hidden="true">
+            <div className="h-1.5 w-4/5 rounded bg-cyber-900" />
+            <div className="h-1.5 w-3/5 rounded bg-danger-900" />
+          </div>
+        </div>
+      )}
 
       {/* Status indicator */}
       <div className="flex items-center gap-1.5 shrink-0">
