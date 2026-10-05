@@ -74,14 +74,15 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 // ─── Startup ──────────────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT || '5000', 10);
+const HOST = '0.0.0.0';
 
 async function start(): Promise<void> {
   await connectDB();
 
   initSocket(httpServer);
 
-  httpServer.listen(PORT, () => {
-    console.log(`\n🚀 Survival Game Server running on port ${PORT}`);
+  httpServer.listen(PORT, HOST, () => {
+    console.log(`\n🚀 Survival Game Server running on ${HOST}:${PORT}`);
     console.log(`   Environment : ${process.env.NODE_ENV}`);
     console.log(`   Client URL  : ${process.env.CLIENT_URL}`);
     console.log(`   Health      : http://localhost:${PORT}/api/health\n`);

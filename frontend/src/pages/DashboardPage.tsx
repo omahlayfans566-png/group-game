@@ -15,7 +15,7 @@ import { useAuthStore } from '../store/authStore';
 import { gamesApi, challengesApi } from '../lib/api';
 import { getSocket, joinGameRoom } from '../lib/socket';
 import CountdownTimer from '../components/shared/CountdownTimer';
-import { Game, GameDay, Challenge, Announcement, PlayerGame, ChallengeAttempt } from '../types';
+import { Game, GameDay, Challenge, Announcement, ChallengeAttempt } from '../types';
 import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
 
@@ -34,13 +34,15 @@ type DayState =
   | 'LOCKED'        // future, not yet open
   | 'UPCOMING'      // open day, no challenge found or not started
   | 'IN_PROGRESS'   // player has an active attempt right now
-  | 'DONE'          // player's attempt is COMPLETED or TIME_EXPIRED
+  | 'COMPLETED'     // player's attempt was submitted and locked
+  | 'TIME_EXPIRED'  // player's attempt expired and was locked
   | 'CLOSED'        // global window closed, player never started
   | 'OPEN';         // game window is open, player can enter
 
 function dayStateColor(s: DayState): string {
   switch (s) {
-    case 'DONE': return 'bg-emerald-900 border-emerald-600 text-emerald-300';
+    case 'COMPLETED': return 'bg-emerald-900 border-emerald-600 text-emerald-300';
+    case 'TIME_EXPIRED': return 'bg-amber-900 border-amber-700 text-amber-300';
     case 'IN_PROGRESS': return 'bg-cyber-900 border-cyber-500 text-cyber-300 animate-pulse';
     case 'OPEN': return 'bg-cyber-900 border-cyber-600 text-cyber-300';
     case 'UPCOMING': return 'bg-arena-800 border-arena-600 text-gray-400';
@@ -51,7 +53,8 @@ function dayStateColor(s: DayState): string {
 
 function dayStateIcon(s: DayState): string {
   switch (s) {
-    case 'DONE': return '✓';
+    case 'COMPLETED': return '✓';
+    case 'TIME_EXPIRED': return '⏰';
     case 'IN_PROGRESS': return '●';
     case 'OPEN': return '●';
     case 'UPCOMING': return '○';
@@ -62,7 +65,8 @@ function dayStateIcon(s: DayState): string {
 
 function dayStateLabel(s: DayState): string {
   switch (s) {
-    case 'DONE': return 'COMPLETED';
+    case 'COMPLETED': return 'COMPLETED';
+    case 'TIME_EXPIRED': return 'TIME EXPIRED';
     case 'IN_PROGRESS': return 'IN PROGRESS';
     case 'OPEN': return 'AVAILABLE';
     case 'UPCOMING': return 'UPCOMING';
@@ -82,14 +86,13 @@ export default function DashboardPage() {
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   // Map challengeId → my attempt for that challenge
   const [attemptMap, setAttemptMap] = useState<Record<string, ChallengeAttempt>>({});
-  const [playerGame, setPlayerGame] = useState<PlayerGame | null>(null);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => new Date());
 
   // Keep "now" updated every 30s so live status updates without full reload
   useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 30_000);
+    const id = setInterval(() => setNow(new Date()), 1_000);
     return () => clearInterval(id);
   }, []);
 
@@ -101,9 +104,8 @@ export default function DashboardPage() {
       if (!activeGame) { setLoading(false); return; }
       setGame(activeGame);
 
-      const [daysRes, playersRes, annRes] = await Promise.all([
+      const [daysRes, annRes] = await Promise.all([
         gamesApi.getDays(activeGame._id),
-        gamesApi.getPlayers(activeGame._id).catch(() => ({ data: { players: [] } })),
         gamesApi.getAnnouncements(activeGame._id).catch(() => ({ data: { announcements: [] } })),
       ]);
 
@@ -111,12 +113,6 @@ export default function DashboardPage() {
         .sort((a: GameDay, b: GameDay) => a.dayNumber - b.dayNumber);
       setDays(gameDays);
       setAnnouncements((annRes.data.announcements || []).slice(0, 5));
-
-      const playerList: PlayerGame[] = playersRes.data.players || [];
-      const mine = playerList.find(p =>
-        (typeof p.userId === 'object' ? p.userId._id : p.userId) === user?._id
-      );
-      if (mine) setPlayerGame(mine);
 
       // Load challenges for all days + attempts for each
       const challRes = await challengesApi.getAll({ gameId: activeGame._id }).catch(() => ({ data: { challenges: [] } }));
@@ -140,6 +136,12 @@ export default function DashboardPage() {
   }, [user?._id]);
 
   useEffect(() => { loadDashboard(); }, [loadDashboard]);
+
+  // Reconcile displayed attempt states with the backend while this screen is open.
+  useEffect(() => {
+    const id = setInterval(loadDashboard, 10_000);
+    return () => clearInterval(id);
+  }, [loadDashboard]);
 
   // Socket
   useEffect(() => {
@@ -170,22 +172,22 @@ export default function DashboardPage() {
   const attemptForChallenge = (challengeId: string): ChallengeAttempt | undefined =>
     attemptMap[challengeId];
 
-  /** Compute player-visible state for a given day */
+  /** Compute player-visible state from the stored attempt and schedule. */
   const computeDayState = (day: GameDay): DayState => {
-    const ch = challengeForDay(day.dayNumber);
-    if (ch) {
-      const att = attemptForChallenge(ch._id);
-      if (att?.status === 'COMPLETED' || att?.status === 'TIME_EXPIRED') return 'DONE';
-      if (att?.status === 'IN_PROGRESS') {
-        // Check server deadline hasn't passed
-        if (new Date(att.deadlineAt) > now) return 'IN_PROGRESS';
-        return 'DONE'; // deadline passed — treat as done
-      }
-    }
-    // Timestamps are the player-facing reflection of the server-enforced window.
     const start = new Date(day.challengeStartTime).getTime();
     const end = new Date(day.challengeEndTime).getTime();
     const current = now.getTime();
+    const ch = challengeForDay(day.dayNumber);
+    if (ch) {
+      const att = attemptForChallenge(ch._id);
+      if (att?.status === 'COMPLETED') return 'COMPLETED';
+      if (att?.status === 'TIME_EXPIRED') return 'TIME_EXPIRED';
+      if (att?.status === 'IN_PROGRESS') {
+        if (current < end && new Date(att.deadlineAt) > now) return 'IN_PROGRESS';
+        return 'TIME_EXPIRED';
+      }
+    }
+    // Timestamps are the player-facing reflection of the server-enforced window.
     if (current < start) return 'UPCOMING';
     if (current >= end || ['CLOSED', 'RESULTS', 'COMPLETED'].includes(day.status)) return 'CLOSED';
     return ch?.isActive ? 'OPEN' : 'UPCOMING';
@@ -198,7 +200,7 @@ export default function DashboardPage() {
   const todayAttempt = todayChallenge ? attemptForChallenge(todayChallenge._id) : undefined;
   const todayState = todayDay ? computeDayState(todayDay) : null;
 
-  const completedDays = days.filter(d => computeDayState(d) === 'DONE').length;
+  const completedDays = days.filter(d => ['COMPLETED', 'TIME_EXPIRED'].includes(computeDayState(d))).length;
   const totalDays = days.length || 7;
 
   const groupLink = game?.groupLink || import.meta.env.VITE_GROUP_LINK || '#';
@@ -247,11 +249,11 @@ export default function DashboardPage() {
             </h1>
             <p className="text-gray-600 text-sm font-mono mt-0.5">{user?.playerTag}</p>
           </div>
-          {completedDays > 0 && (
+          {game && (
             <div className="text-right shrink-0">
-              <p className="text-xs text-gray-500 uppercase tracking-wider">Progress</p>
+              <p className="text-xs text-gray-500 uppercase tracking-wider">Weekly Challenges</p>
               <p className="text-2xl font-bold text-white">{completedDays}<span className="text-gray-600 text-sm">/{totalDays}</span></p>
-              <p className="text-[10px] text-gray-600 uppercase tracking-wider">challenges done</p>
+              <p className="text-[10px] text-gray-600 uppercase tracking-wider">completed or locked</p>
             </div>
           )}
         </div>
@@ -310,20 +312,18 @@ export default function DashboardPage() {
               </div>
 
               {/* Progress bar */}
-              {completedDays > 0 && (
-                <div className="pt-2 border-t border-arena-700 space-y-2">
-                  <div className="flex items-center justify-between text-xs text-gray-500">
-                    <span>Weekly progress</span>
-                    <span>{completedDays} / {totalDays} completed</span>
-                  </div>
-                  <div className="h-1.5 bg-arena-700 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-cyber-600 to-emerald-500 rounded-full transition-all duration-700"
-                      style={{ width: `${(completedDays / totalDays) * 100}%` }}
-                    />
-                  </div>
+              <div className="pt-2 border-t border-arena-700 space-y-2">
+                <div className="flex items-center justify-between text-xs text-gray-500">
+                  <span>YOUR SURVIVAL PROGRESS</span>
+                  <span>{completedDays} / {totalDays} completed</span>
                 </div>
-              )}
+                <div className="h-1.5 bg-arena-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-cyber-600 to-emerald-500 rounded-full transition-all duration-700"
+                    style={{ width: `${(completedDays / totalDays) * 100}%` }}
+                  />
+                </div>
+              </div>
             </div>
 
             {/* ── Announcements ── */}
@@ -377,7 +377,7 @@ interface TodayCardProps {
   day: GameDay | null;
   challenge: Challenge | null;
   attempt: ChallengeAttempt | null;
-  state: 'LOCKED' | 'UPCOMING' | 'IN_PROGRESS' | 'DONE' | 'CLOSED' | 'OPEN' | null;
+  state: DayState | null;
   groupLink: string;
   onEnter: () => void;
   onTimerExpire: () => void;
@@ -401,10 +401,11 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, onEnter
   const maxMin = challenge ? Math.round(challenge.durationSeconds / 60) : 0;
 
   const borderClass =
-    state === 'DONE' ? 'border-emerald-700 shadow-[0_0_20px_rgba(16,185,129,0.1)]' :
-      state === 'IN_PROGRESS' ? 'border-cyber-600 shadow-[0_0_20px_rgba(0,102,102,0.2)]' :
-        state === 'OPEN' ? 'border-cyber-700' :
-          'border-arena-600';
+    state === 'COMPLETED' ? 'border-emerald-700 shadow-[0_0_20px_rgba(16,185,129,0.1)]' :
+      state === 'TIME_EXPIRED' ? 'border-amber-700 shadow-[0_0_20px_rgba(245,158,11,0.1)]' :
+        state === 'IN_PROGRESS' ? 'border-cyber-600 shadow-[0_0_20px_rgba(0,102,102,0.2)]' :
+          state === 'OPEN' ? 'border-cyber-700' :
+            'border-arena-600';
 
   return (
     <div className={`arena-card p-5 sm:p-6 border ${borderClass} space-y-4`}>
@@ -419,16 +420,18 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, onEnter
         </div>
         <div className="text-right shrink-0">
           <p className={`text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border
-            ${state === 'DONE' ? 'bg-emerald-900/50 border-emerald-700 text-emerald-300' :
-              state === 'IN_PROGRESS' ? 'bg-cyber-900/50 border-cyber-600 text-cyber-300' :
-                state === 'OPEN' ? 'bg-cyber-900/30 border-cyber-700 text-cyber-400' :
-                  state === 'CLOSED' ? 'bg-arena-700 border-arena-600 text-gray-400' :
-                    'bg-arena-800 border-arena-700 text-gray-500'}`}>
-            {state === 'DONE' ? '✓ DONE' :
-              state === 'IN_PROGRESS' ? '● LIVE' :
-                state === 'OPEN' ? '● AVAILABLE' :
-                  state === 'CLOSED' ? 'CLOSED' :
-                    state === 'UPCOMING' ? 'UPCOMING' : 'LOCKED'}
+            ${state === 'COMPLETED' ? 'bg-emerald-900/50 border-emerald-700 text-emerald-300' :
+              state === 'TIME_EXPIRED' ? 'bg-amber-900/50 border-amber-700 text-amber-300' :
+                state === 'IN_PROGRESS' ? 'bg-cyber-900/50 border-cyber-600 text-cyber-300' :
+                  state === 'OPEN' ? 'bg-cyber-900/30 border-cyber-700 text-cyber-400' :
+                    state === 'CLOSED' ? 'bg-arena-700 border-arena-600 text-gray-400' :
+                      'bg-arena-800 border-arena-700 text-gray-500'}`}>
+            {state === 'COMPLETED' ? '✓ COMPLETED' :
+              state === 'TIME_EXPIRED' ? '⏰ TIME EXPIRED' :
+                state === 'IN_PROGRESS' ? '● LIVE' :
+                  state === 'OPEN' ? '● AVAILABLE' :
+                    state === 'CLOSED' ? 'CLOSED' :
+                      state === 'UPCOMING' ? 'UPCOMING' : 'LOCKED'}
           </p>
         </div>
       </div>
@@ -469,7 +472,7 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, onEnter
       {(state === 'LOCKED' || state === 'UPCOMING') && day && (
         <div className="bg-arena-900 border border-arena-700 rounded-lg px-4 py-3 text-center space-y-1">
           <p className="text-gray-500 text-sm">
-            {state === 'LOCKED' ? '🔒 Not yet scheduled' : `Opens at ${startTime}`}
+            {state === 'LOCKED' ? '🔒 Locked' : `🔒 Locked until ${startTime}`}
           </p>
           <p className="text-gray-600 text-xs">Server time controls unlock — device clock has no effect.</p>
         </div>
@@ -485,7 +488,7 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, onEnter
             </p>
           </div>
           <button onClick={onEnter} className="btn-primary w-full py-4 text-base tracking-wide">
-            ⚡ START CHALLENGE
+            ⚡ START GAME
           </button>
         </div>
       )}
@@ -509,7 +512,7 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, onEnter
           </div>
           <div className="flex gap-3">
             <button onClick={onEnter} className="btn-primary flex-1 py-3 text-sm">
-              ⚡ RESUME CHALLENGE
+              ⚡ CONTINUE GAME
             </button>
           </div>
           <p className="text-gray-600 text-xs text-center">
@@ -518,15 +521,15 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, onEnter
         </div>
       )}
 
-      {/* DONE — submitted or expired */}
-      {state === 'DONE' && (
+      {/* Locked attempt: submitted or expired */}
+      {(state === 'COMPLETED' || state === 'TIME_EXPIRED') && (
         <div className="space-y-3">
-          <div className={`rounded-lg px-4 py-4 text-center space-y-2 ${attempt?.status === 'COMPLETED'
+          <div className={`rounded-lg px-4 py-4 text-center space-y-2 ${state === 'COMPLETED'
             ? 'bg-emerald-900/20 border border-emerald-800'
             : 'bg-arena-900 border border-arena-700'
             }`}>
-            <p className={`text-base font-bold ${attempt?.status === 'COMPLETED' ? 'text-emerald-400' : 'text-gray-300'}`}>
-              {attempt?.status === 'COMPLETED' ? '✓ SUBMISSION RECEIVED' : '⏱ TIME EXPIRED'}
+            <p className={`text-base font-bold ${state === 'COMPLETED' ? 'text-emerald-400' : 'text-amber-300'}`}>
+              {state === 'COMPLETED' ? '✓ SUBMISSION RECEIVED' : '⏱ TIME IS UP'}
             </p>
             <p className="text-gray-400 text-sm">
               Thank you for participating. Your challenge has been locked.
@@ -566,34 +569,36 @@ interface WeekDayRowProps {
   shortName: string;
   longName: string;
   day: GameDay | undefined;
-  state: 'LOCKED' | 'UPCOMING' | 'IN_PROGRESS' | 'DONE' | 'CLOSED' | 'OPEN';
+  state: DayState;
   isSunday: boolean;
 }
 
 function WeekDayRow({ dayNumber, shortName, longName, day, state, isSunday }: WeekDayRowProps) {
-  const isDone = state === 'DONE';
+  const isExpired = state === 'TIME_EXPIRED';
   const isLive = state === 'IN_PROGRESS' || state === 'OPEN';
 
   return (
     <div className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors
-      ${isDone ? 'bg-emerald-900/10 border-emerald-900' :
-        isLive ? 'bg-cyber-900/15 border-cyber-800' :
-          isSunday ? 'bg-gold-900/10 border-gold-900/30' :
-            'bg-arena-900/50 border-arena-800'}`}>
+      ${state === 'COMPLETED' ? 'bg-emerald-900/10 border-emerald-900' :
+        isExpired ? 'bg-amber-900/10 border-amber-900' :
+          isLive ? 'bg-cyber-900/15 border-cyber-800' :
+            isSunday ? 'bg-gold-900/10 border-gold-900/30' :
+              'bg-arena-900/50 border-arena-800'}`}>
 
       {/* Day number badge */}
       <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0
-        ${isDone ? 'bg-emerald-900 text-emerald-300 border border-emerald-700' :
-          isLive ? 'bg-cyber-900 text-cyber-300 border border-cyber-700' :
-            isSunday ? 'bg-gold-700 text-arena-950 border border-gold-500' :
-              'bg-arena-700 text-gray-400 border border-arena-600'}`}>
+        ${state === 'COMPLETED' ? 'bg-emerald-900 text-emerald-300 border border-emerald-700' :
+          isExpired ? 'bg-amber-900 text-amber-300 border border-amber-700' :
+            isLive ? 'bg-cyber-900 text-cyber-300 border border-cyber-700' :
+              isSunday ? 'bg-gold-700 text-arena-950 border border-gold-500' :
+                'bg-arena-700 text-gray-400 border border-arena-600'}`}>
         {dayNumber}
       </div>
 
       {/* Day name + times */}
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
-          <span className={`text-sm font-semibold ${isDone ? 'text-emerald-300' : isLive ? 'text-cyber-300' : isSunday ? 'text-gold-300' : 'text-gray-300'}`}>
+          <span className={`text-sm font-semibold ${state === 'COMPLETED' ? 'text-emerald-300' : isExpired ? 'text-amber-300' : isLive ? 'text-cyber-300' : isSunday ? 'text-gold-300' : 'text-gray-300'}`}>
             {longName}
             {isSunday && <span className="text-[10px] text-gold-500 ml-1.5 uppercase tracking-wider">Final</span>}
           </span>
@@ -609,11 +614,11 @@ function WeekDayRow({ dayNumber, shortName, longName, day, state, isSunday }: We
 
       {/* Status indicator */}
       <div className="flex items-center gap-1.5 shrink-0">
-        <span className={`text-base ${isDone ? 'text-emerald-400' : isLive ? 'text-cyber-400' : 'text-gray-600'}`}>
+        <span className={`text-base ${state === 'COMPLETED' ? 'text-emerald-400' : isExpired ? 'text-amber-400' : isLive ? 'text-cyber-400' : 'text-gray-600'}`}>
           {dayStateIcon(state)}
         </span>
         <span className={`text-[10px] font-bold uppercase tracking-widest hidden sm:block
-          ${isDone ? 'text-emerald-400' : isLive ? 'text-cyber-400' : 'text-gray-600'}`}>
+          ${state === 'COMPLETED' ? 'text-emerald-400' : isExpired ? 'text-amber-400' : isLive ? 'text-cyber-400' : 'text-gray-600'}`}>
           {dayStateLabel(state)}
         </span>
       </div>

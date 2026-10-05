@@ -168,7 +168,8 @@ router.post('/:id/start', authenticate, challengeLimiter, async (req: AuthReques
     const inProgress = existingAttempts.find(a => a.status === 'IN_PROGRESS');
     if (inProgress) {
       const now = new Date();
-      if (now > inProgress.deadlineAt) {
+      const reconnectDay = await GameDay.findById(inProgress.gameDayId);
+      if (now >= inProgress.deadlineAt || (reconnectDay && now >= reconnectDay.challengeEndTime)) {
         inProgress.status = 'TIME_EXPIRED';
         await inProgress.save();
         res.status(403).json({
@@ -560,7 +561,12 @@ router.get('/:id/my-attempt', authenticate, async (req: AuthRequest, res: Respon
 
     if (!attempt) { res.json({ success: true, attempt: null }); return; }
 
-    if (attempt.status === 'IN_PROGRESS' && new Date() > attempt.deadlineAt) {
+    const now = new Date();
+    const gameDay = await GameDay.findById(attempt.gameDayId).select('challengeEndTime');
+    if (
+      attempt.status === 'IN_PROGRESS' &&
+      (now >= attempt.deadlineAt || (gameDay && now >= gameDay.challengeEndTime))
+    ) {
       attempt.status = 'TIME_EXPIRED';
       await attempt.save();
     }

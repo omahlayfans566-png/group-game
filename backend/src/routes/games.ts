@@ -269,8 +269,14 @@ router.post('/:gameId/enroll-bulk', authenticate, requireAdmin, async (req: Auth
 // GET /api/games/:gameId/players  (admin: all fields; player: limited)
 router.get('/:gameId/players', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const playerGames = await PlayerGame.find({ gameId: req.params.gameId })
-      .populate('userId', 'playerNumber nickname status email')
+    const isAdmin = req.user!.role === 'admin';
+    const filter = isAdmin
+      ? { gameId: req.params.gameId }
+      : { gameId: req.params.gameId, userId: req.user!._id };
+    const query = PlayerGame.find(filter)
+      .populate('userId', 'playerNumber nickname email');
+    if (!isAdmin) query.select('-totalScore -rank -dayEliminated -status');
+    const playerGames = await query
       .sort({ totalScore: -1 });
 
     res.json({ success: true, players: playerGames });
