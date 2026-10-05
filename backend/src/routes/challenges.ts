@@ -78,6 +78,72 @@ router.get('/audit', authenticate, requireAdmin, async (req: AuthRequest, res: R
   }
 });
 
+// GET /api/challenges/admin-results?gameId=...&dayNumber=...&status=...
+router.get('/admin-results', authenticate, requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const filter: Record<string, unknown> = {};
+    if (req.query.gameId) filter.gameId = req.query.gameId;
+    if (req.query.dayNumber) filter.dayNumber = Number(req.query.dayNumber);
+    const challenges = await Challenge.find(filter).sort({ dayNumber: 1 });
+    const challengeIds = challenges.map(challenge => challenge._id);
+    const attemptFilter: Record<string, unknown> = { challengeId: { $in: challengeIds } };
+    if (req.query.status) attemptFilter.status = req.query.status;
+    const attempts = await ChallengeAttempt.find(attemptFilter)
+      .populate('userId', 'playerNumber playerTag nickname')
+      .populate('challengeId', 'title dayNumber challengeType totalStages maxScore durationSeconds')
+      .sort({ createdAt: -1 });
+    const results = attempts.map(attempt => {
+      const challenge = attempt.challengeId as unknown as { totalStages: number; maxScore: number; durationSeconds: number; dayNumber: number };
+      const history = attempt.stageHistory || [];
+      const totalQuestions = Math.max(1, challenge?.totalStages || attempt.totalStages || history.length);
+      const correctCount = history.filter(stage => stage.isCorrect).length;
+      const wrongCount = Math.max(0, history.length - correctCount);
+      const percentageCorrect = Math.round((correctCount / totalQuestions) * 100);
+      return {
+        _id: attempt._id,
+        user: attempt.userId,
+        challenge: attempt.challengeId,
+        status: attempt.status,
+        attemptNumber: attempt.attemptNumber,
+        startedAt: attempt.startedAt,
+        completedAt: attempt.completedAt,
+        deadlineAt: attempt.deadlineAt,
+        timeTakenSeconds: attempt.timeTakenSeconds,
+        timeRemainingSeconds: Math.max(0, Math.floor((attempt.deadlineAt.getTime() - (attempt.completedAt || new Date()).getTime()) / 1000)),
+        score: attempt.score,
+        maxScore: attempt.maxScore,
+        correctCount,
+        wrongCount,
+        totalQuestions,
+        percentageCorrect,
+        percentageWrong: 100 - percentageCorrect,
+        stageHistory: history.map(stage => ({
+          stage: stage.stage,
+          isCorrect: stage.isCorrect,
+          score: stage.score,
+          timeTakenSeconds: stage.timeTakenSeconds,
+          playerAnswer: stage.answerPayload,
+          correctAnswer: adminCorrectAnswer(attempt.individualPuzzleData.secretData, stage.stage),
+        })),
+      };
+    });
+    res.json({ success: true, results });
+  } catch (err) {
+    console.error('Admin results error:', err);
+    res.status(500).json({ success: false, message: 'Unable to load results' });
+  }
+});
+
+function adminCorrectAnswer(secret: Record<string, unknown>, stageNumber: number): unknown {
+  const stages = secret.stages as Record<string, Record<string, unknown>> | undefined;
+  if (stages?.[stageNumber]) return stages[stageNumber].answer ?? stages[stageNumber].answers ?? stages[stageNumber];
+  if (stageNumber === 1 && secret.s1Answers) return secret.s1Answers;
+  if (stageNumber === 2 && secret.s2Answers) return secret.s2Answers;
+  if (stageNumber === 3 && secret.s3Answer) return secret.s3Answer;
+  if (stageNumber === 1) return secret.answers ?? secret.correctRots ?? secret.state5Grid ?? secret.activeIds ?? secret.correctOrder ?? secret.mapping ?? null;
+  return null;
+}
+
 const CreateChallengeSchema = z.object({
   gameId: z.string().min(1),
   gameDayId: z.string().min(1),

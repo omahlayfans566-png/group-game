@@ -6,8 +6,17 @@ import GameDay from '../models/GameDay';
 import PlayerGame from '../models/PlayerGame';
 import User from '../models/User';
 import Announcement from '../models/Announcement';
+import Challenge from '../models/Challenge';
+import ChallengeAttempt from '../models/ChallengeAttempt';
+import Submission from '../models/Submission';
+import Elimination from '../models/Elimination';
 
 const router = Router();
+
+function plainScheduleDay(day: unknown): Record<string, unknown> {
+  const value = day as { toObject?: () => Record<string, unknown> };
+  return typeof value.toObject === 'function' ? value.toObject() : day as Record<string, unknown>;
+}
 
 // ─── Validation Schemas ───────────────────────────────────────────────────────
 
@@ -96,6 +105,79 @@ router.get('/schedule', authenticate, async (_req: AuthRequest, res: Response): 
     });
   } catch (_err) {
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// GET /api/games/admin-overview (admin-only control center data)
+router.get('/admin-overview', authenticate, requireAdmin, async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const serverNow = new Date();
+    const game = await Game.findOne({ status: { $in: ['ACTIVE', 'PAUSED', 'DRAFT'] } }).sort({ createdAt: -1 });
+    const days = game
+      ? await GameDay.find({ gameId: game._id }).sort({ dayNumber: 1 })
+      : buildFallbackSchedule(serverNow);
+    const players = await User.countDocuments({ role: 'player' });
+    const activePlayers = await User.countDocuments({ role: 'player', isActive: true, status: { $nin: ['ELIMINATED'] } });
+    const finalists = await User.countDocuments({ role: 'player', status: 'FINALIST' });
+    const eliminated = await Elimination.countDocuments(game ? { gameId: game._id } : { _id: { $exists: false } });
+    const dayRecords = days.map(plainScheduleDay);
+    const completedDays = dayRecords.filter(day => new Date(String(day.challengeEndTime)).getTime() <= serverNow.getTime()).length;
+    const today = dayRecords.find(day => serverNow >= new Date(String(day.challengeStartTime)) && serverNow < new Date(String(day.challengeEndTime)));
+    const todayChallenge = game && today
+      ? await Challenge.findOne({ gameId: game._id, dayNumber: today.dayNumber, isActive: true }).select('title challengeType difficulty durationSeconds totalStages')
+      : null;
+    const todayFilter = today && game ? { gameDayId: today._id } : { _id: { $exists: false } };
+    const submittedToday = await ChallengeAttempt.countDocuments({ ...todayFilter, status: 'COMPLETED' });
+    const expiredToday = await ChallengeAttempt.countDocuments({ ...todayFilter, status: 'TIME_EXPIRED' });
+    const inProgressToday = await ChallengeAttempt.countDocuments({ ...todayFilter, status: 'IN_PROGRESS' });
+
+    res.json({
+      success: true,
+      serverNow: serverNow.toISOString(),
+      timezone: 'Africa/Lagos',
+      game: game ? { _id: game._id, name: game.name, status: game.status, currentDay: game.currentDay, targetFinalists: game.targetFinalists } : null,
+      days: dayRecords,
+      stats: {
+        totalPlayers: players,
+        activePlayers,
+        finalists,
+        eliminated,
+        totalGames: 7,
+        completedGames: completedDays,
+        submittedToday,
+        expiredToday,
+        inProgressToday,
+        pendingToday: Math.max(0, activePlayers - submittedToday - expiredToday - inProgressToday),
+      },
+      today: today ? { ...today, challenge: todayChallenge } : null,
+    });
+  } catch (err) {
+    console.error('Admin overview error:', err);
+    res.status(500).json({ success: false, message: 'Unable to load admin overview' });
+  }
+});
+
+// GET /api/games/admin-schedule (admin-only seven-day schedule)
+router.get('/admin-schedule', authenticate, requireAdmin, async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const game = await Game.findOne({ status: { $in: ['ACTIVE', 'PAUSED', 'DRAFT'] } }).sort({ createdAt: -1 });
+    const serverNow = new Date();
+    const days = game ? await GameDay.find({ gameId: game._id }).sort({ dayNumber: 1 }) : buildFallbackSchedule(serverNow);
+    const challenges = game ? await Challenge.find({ gameId: game._id }).select('dayNumber title challengeType difficulty durationSeconds totalStages isActive') : [];
+    const rows = await Promise.all(days.map(async day => {
+      const attempts = game ? await ChallengeAttempt.find({ gameDayId: day._id }).select('status') : [];
+      return {
+        ...plainScheduleDay(day),
+        challenge: challenges.find(challenge => challenge.dayNumber === day.dayNumber) || null,
+        submitted: attempts.filter(attempt => attempt.status === 'COMPLETED').length,
+        expired: attempts.filter(attempt => attempt.status === 'TIME_EXPIRED').length,
+        pending: attempts.filter(attempt => attempt.status === 'IN_PROGRESS').length,
+      };
+    }));
+    res.json({ success: true, serverNow: serverNow.toISOString(), timezone: 'Africa/Lagos', game, days: rows });
+  } catch (err) {
+    console.error('Admin schedule error:', err);
+    res.status(500).json({ success: false, message: 'Unable to load admin schedule' });
   }
 });
 

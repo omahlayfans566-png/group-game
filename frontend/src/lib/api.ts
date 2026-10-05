@@ -64,6 +64,8 @@ export const authApi = {
 
 export const gamesApi = {
   getAll: () => axiosInstance.get('/games'),
+  getAdminOverview: () => axiosInstance.get('/games/admin-overview'),
+  getAdminSchedule: () => axiosInstance.get('/games/admin-schedule'),
   getServerTime: () => axiosInstance.get('/games/server-time'),
   getSchedule: () => axiosInstance.get('/games/schedule'),
   getOne: (gameId: string) => axiosInstance.get(`/games/${gameId}`),
@@ -99,6 +101,8 @@ export const challengesApi = {
   getAll: (params?: { gameId?: string; dayNumber?: number }) =>
     axiosInstance.get('/challenges', { params }),
   audit: (gameId: string) => axiosInstance.get('/challenges/audit', { params: { gameId } }),
+  getAdminResults: (params: { gameId?: string; dayNumber?: number | ''; status?: string }) =>
+    axiosInstance.get('/challenges/admin-results', { params }),
   getOne: (id: string) => axiosInstance.get(`/challenges/${id}`),
   create: (data: Record<string, unknown>) => axiosInstance.post('/challenges', data),
   update: (id: string, data: Record<string, unknown>) =>
