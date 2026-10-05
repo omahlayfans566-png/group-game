@@ -15,6 +15,13 @@ const PUZZLE_TYPES: Array<{ value: string; label: string; description: string; s
   { value: 'HIDDEN_OBJECT', label: 'Hidden Object', description: 'Locate hidden words inside a letter grid', stages: 1 },
   { value: 'LOGIC', label: 'Logic', description: 'Use clues to deduce a correct mapping', stages: 1 },
   { value: 'MULTI_STAGE', label: 'Multi-Stage', description: '4-stage compound challenge (sequence → code → pattern → final)', stages: 4 },
+  { value: 'BROKEN_MACHINE', label: 'Broken Machine', description: 'Rotate a circuit path from source to sink', stages: 1 },
+  { value: 'PATTERN_VAULT', label: 'Pattern Vault', description: 'Decode simultaneous visual transformation rules', stages: 1 },
+  { value: 'MEMORY_VAULT', label: 'Memory Vault', description: 'Recall, reorder, and reconstruct a changing room', stages: 3 },
+  { value: 'CIPHER_ROOM', label: 'Cipher Room', description: 'Open four connected locks using discovered keys', stages: 4 },
+  { value: 'RULE_TRAP', label: 'Rule Trap', description: 'Probe a hidden rule before committing the final set', stages: 1 },
+  { value: 'BLACK_VAULT', label: 'Black Vault', description: 'Five connected stages of memory, pattern, and logic', stages: 5 },
+  { value: 'FINAL_VAULT', label: 'Final Vault', description: 'Championship synthesis for eligible finalists', stages: 5 },
 ];
 
 const DIFFICULTIES = ['EASY', 'MEDIUM', 'HARD', 'EXTREME'] as const;
@@ -35,6 +42,8 @@ export default function AdminChallenges() {
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [audit, setAudit] = useState<Array<{ dayNumber: number; dayOfWeek: string; ready: boolean; challengeType: string | null; hasSchedule: boolean; hasChallenge: boolean; isActive: boolean; generatorGenerated: boolean }>>([]);
+  const [auditing, setAuditing] = useState(false);
 
   const defaultForm = {
     title: '', description: '', instructions: '',
@@ -126,6 +135,17 @@ export default function AdminChallenges() {
     catch { toast.error('Deactivate first'); }
   };
 
+  const runAudit = async () => {
+    if (!selectedGameId) { toast.error('Select a game first'); return; }
+    setAuditing(true);
+    try {
+      const res = await challengesApi.audit(selectedGameId);
+      setAudit(res.data.audit || []);
+      toast.success(res.data.ready ? 'All seven days are ready' : 'Audit found setup gaps');
+    } catch { toast.error('Unable to run readiness audit'); }
+    finally { setAuditing(false); }
+  };
+
   const startEdit = (c: Challenge) => {
     setSelectedGameId(c.gameId);
     setForm({
@@ -171,8 +191,20 @@ export default function AdminChallenges() {
           >
             {showCreate && !editId ? 'Cancel' : '+ New Challenge'}
           </button>
+          <button onClick={runAudit} disabled={auditing || !selectedGameId} className="btn-ghost text-sm py-2 px-3">
+            {auditing ? 'Auditing…' : 'Audit 7 days'}
+          </button>
         </div>
       </div>
+
+      {audit.length > 0 && (
+        <div className="arena-card p-5 space-y-3">
+          <div className="flex items-center justify-between"><p className="section-title mb-0">Seven-day readiness</p><span className="text-xs text-gray-500">No answers are exposed</span></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+            {audit.map(day => <div key={day.dayNumber} className={`rounded-lg border px-3 py-3 ${day.ready ? 'border-emerald-800 bg-emerald-950/20' : 'border-danger-800 bg-danger-950/20'}`}><div className="flex justify-between text-xs"><span className="text-white">{day.dayNumber}. {day.dayOfWeek}</span><span className={day.ready ? 'text-emerald-300' : 'text-danger-300'}>{day.ready ? 'READY' : 'CHECK'}</span></div><p className="mt-1 text-[10px] text-gray-500">{day.challengeType || 'No challenge'}{day.generatorGenerated ? ' · generated' : ''}</p></div>)}
+          </div>
+        </div>
+      )}
 
       {/* Create / Edit form */}
       {showCreate && (
@@ -250,11 +282,11 @@ export default function AdminChallenges() {
                     key={d} type="button"
                     onClick={() => f('difficulty', d)}
                     className={`flex-1 py-2 text-xs font-bold rounded border transition-all ${form.difficulty === d
-                        ? d === 'EASY' ? 'bg-emerald-900 border-emerald-600 text-emerald-300'
-                          : d === 'MEDIUM' ? 'bg-amber-900 border-amber-600 text-amber-300'
-                            : d === 'HARD' ? 'bg-orange-900 border-orange-600 text-orange-300'
-                              : 'bg-danger-900 border-danger-600 text-danger-300'
-                        : 'bg-arena-800 border-arena-600 text-gray-500 hover:text-gray-300'
+                      ? d === 'EASY' ? 'bg-emerald-900 border-emerald-600 text-emerald-300'
+                        : d === 'MEDIUM' ? 'bg-amber-900 border-amber-600 text-amber-300'
+                          : d === 'HARD' ? 'bg-orange-900 border-orange-600 text-orange-300'
+                            : 'bg-danger-900 border-danger-600 text-danger-300'
+                      : 'bg-arena-800 border-arena-600 text-gray-500 hover:text-gray-300'
                       }`}
                   >{d}</button>
                 ))}
@@ -347,9 +379,9 @@ export default function AdminChallenges() {
                   <div className="flex flex-wrap items-center gap-2 mb-1">
                     <p className="text-white font-bold">{c.title}</p>
                     <span className={`text-xs px-2 py-0.5 rounded font-bold ${c.difficulty === 'EASY' ? 'bg-emerald-900 text-emerald-400' :
-                        c.difficulty === 'MEDIUM' ? 'bg-amber-900 text-amber-400' :
-                          c.difficulty === 'HARD' ? 'bg-orange-900 text-orange-400' :
-                            'bg-danger-900 text-danger-400'
+                      c.difficulty === 'MEDIUM' ? 'bg-amber-900 text-amber-400' :
+                        c.difficulty === 'HARD' ? 'bg-orange-900 text-orange-400' :
+                          'bg-danger-900 text-danger-400'
                       }`}>{c.difficulty}</span>
                     <span className="text-xs bg-cyber-900 text-cyber-400 border border-cyber-800 px-2 py-0.5 rounded font-mono">
                       {ptInfo?.label ?? c.challengeType}

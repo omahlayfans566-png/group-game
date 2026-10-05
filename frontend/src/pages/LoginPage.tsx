@@ -54,21 +54,19 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-arena-950 flex flex-col">
-      <div className="fixed inset-0 bg-grid-pattern pointer-events-none" />
-      <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-96 h-96 bg-cyber-900 rounded-full blur-[140px] opacity-20 pointer-events-none" />
+    <div className="player-auth-shell flex flex-col">
 
       {/* Nav */}
-      <nav className="relative z-10 flex items-center justify-between px-6 py-4 border-b border-arena-700">
-        <Link to="/" className="flex items-center gap-2 group">
-          <span className="text-cyber-400">⚔</span>
-          <span className="text-white font-bold tracking-[0.15em] text-sm uppercase group-hover:text-cyber-300 transition-colors">
+      <nav className="player-auth-nav relative z-10 flex items-center justify-between px-5 py-5 sm:px-8">
+        <Link to="/" className="flex items-center gap-3 group">
+          <span className="survival-mark">S</span>
+          <span className="text-stone-200 font-semibold tracking-[0.28em] text-xs uppercase group-hover:text-rose-200 transition-colors">
             {import.meta.env.VITE_APP_NAME || 'SURVIVAL'}
           </span>
         </Link>
         <Link
           to="/admin/login"
-          className="text-gray-600 hover:text-gray-400 text-xs tracking-widest uppercase transition-colors"
+          className="text-stone-500 hover:text-stone-200 text-xs tracking-[0.18em] uppercase transition-colors"
         >
           Admin →
         </Link>
@@ -79,17 +77,18 @@ export default function LoginPage() {
 
           {/* Header */}
           <div className="text-center mb-8">
-            <p className="text-cyber-400 text-xs tracking-[0.3em] uppercase mb-3">Player Access</p>
-            <h1 className="text-4xl font-bold text-white tracking-wide">LOGIN</h1>
+            <p className="text-rose-200/80 text-[11px] tracking-[0.35em] uppercase mb-3">The arena awaits</p>
+            <h1 className="font-display text-5xl text-stone-50 tracking-wide">Enter the game</h1>
+            <p className="mt-3 text-sm text-stone-400">Seven days. One final victory.</p>
           </div>
 
           {/* Card */}
-          <div className="arena-card cyber-border p-8">
+          <div className="player-auth-card p-6 sm:p-8">
             <form onSubmit={handleSubmit} className="space-y-5" autoComplete="off">
 
               {/* Email */}
               <div>
-                <label className="block text-xs uppercase tracking-widest text-gray-400 mb-2">
+                <label className="block text-xs uppercase tracking-[0.18em] text-stone-400 mb-2">
                   Email
                 </label>
                 <input
@@ -97,7 +96,7 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="your@email.com"
-                  className="arena-input"
+                  className="player-auth-input"
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
@@ -107,7 +106,7 @@ export default function LoginPage() {
 
               {/* Password */}
               <div>
-                <label className="block text-xs uppercase tracking-widest text-gray-400 mb-2">
+                <label className="block text-xs uppercase tracking-[0.18em] text-stone-400 mb-2">
                   Password
                 </label>
                 <div className="relative">
@@ -116,14 +115,14 @@ export default function LoginPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="arena-input pr-14"
+                    className="player-auth-input pr-14"
                     required
                   />
                   <button
                     type="button"
                     onClick={() => setShowPw(!showPw)}
                     tabIndex={-1}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs transition-colors"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-500 hover:text-stone-200 text-xs transition-colors"
                   >
                     {showPw ? 'HIDE' : 'SHOW'}
                   </button>
@@ -133,7 +132,7 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading || !email || !password}
-                className="btn-primary w-full text-base py-4 mt-2"
+                className="player-auth-cta mt-2"
               >
                 {loading ? (
                   <span className="flex items-center justify-center gap-2">
@@ -146,12 +145,12 @@ export default function LoginPage() {
               </button>
             </form>
 
-            <div className="mt-6 pt-6 border-t border-arena-600 text-center">
-              <p className="text-gray-500 text-sm">
+            <div className="mt-6 pt-6 border-t border-white/10 text-center">
+              <p className="text-stone-500 text-sm">
                 Don&apos;t have an account?{' '}
                 <Link
                   to="/register"
-                  className="text-cyber-400 hover:text-cyber-300 font-semibold transition-colors"
+                  className="text-rose-200 hover:text-white font-semibold transition-colors"
                 >
                   CREATE ACCOUNT
                 </Link>
@@ -160,7 +159,7 @@ export default function LoginPage() {
           </div>
 
           <div className="mt-6 text-center">
-            <Link to="/" className="text-gray-600 hover:text-gray-400 text-xs tracking-wider transition-colors">
+            <Link to="/" className="text-stone-600 hover:text-stone-300 text-xs tracking-wider transition-colors">
               ← Back to Home
             </Link>
           </div>

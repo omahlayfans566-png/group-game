@@ -19,7 +19,64 @@ const router = Router();
 const PUZZLE_TYPES = [
   'SEQUENCE', 'CODE_BREAK', 'MEMORY', 'PATTERN',
   'ARRANGEMENT', 'HIDDEN_OBJECT', 'LOGIC', 'MULTI_STAGE',
+  'BROKEN_MACHINE', 'PATTERN_VAULT', 'MEMORY_VAULT', 'CIPHER_ROOM',
+  'RULE_TRAP', 'BLACK_VAULT', 'FINAL_VAULT',
 ] as const;
+
+const DAILY_PUZZLE_TYPES = [
+  'BROKEN_MACHINE', 'PATTERN_VAULT', 'MEMORY_VAULT', 'CIPHER_ROOM',
+  'RULE_TRAP', 'BLACK_VAULT', 'FINAL_VAULT',
+] as const;
+const DAILY_DAY_NAMES = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'] as const;
+
+// GET /api/challenges/audit?gameId=... (admin only)
+// Generates throwaway display data in memory to verify the seven-day wiring.
+router.get('/audit', authenticate, requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const gameId = String(req.query.gameId || '');
+    if (!gameId) { res.status(400).json({ success: false, message: 'gameId is required' }); return; }
+
+    const [days, challenges] = await Promise.all([
+      GameDay.find({ gameId }).sort({ dayNumber: 1 }),
+      Challenge.find({ gameId }).sort({ dayNumber: 1 }),
+    ]);
+    const byDay = new Map(challenges.map(challenge => [challenge.dayNumber, challenge]));
+    const audit = Array.from({ length: 7 }, (_, index) => {
+      const dayNumber = index + 1;
+      const day = days.find(item => item.dayNumber === dayNumber);
+      const challenge = byDay.get(dayNumber);
+      const expectedType = DAILY_PUZZLE_TYPES[index];
+      let generated = false;
+      let generationError = '';
+      if (challenge) {
+        try {
+          const sample = generatePuzzle(challenge.challengeType, challenge.puzzleConfig || {}, `audit-${gameId}-${dayNumber}`, challenge.difficulty);
+          generated = Boolean(sample.displayData && Object.keys(sample.displayData).length > 0 && sample.totalStages > 0);
+        } catch (error) {
+          generationError = error instanceof Error ? error.message : 'Generation failed';
+        }
+      }
+      const ready = Boolean(day && challenge?.isActive && generated);
+      return {
+        dayNumber,
+        dayOfWeek: day?.dayOfWeek || DAILY_DAY_NAMES[index],
+        ready,
+        hasSchedule: Boolean(day),
+        hasChallenge: Boolean(challenge),
+        isActive: Boolean(challenge?.isActive),
+        challengeType: challenge?.challengeType || null,
+        expectedDailyType: expectedType,
+        rendererRegistered: Boolean(challenge && PUZZLE_TYPES.includes(challenge.challengeType as typeof PUZZLE_TYPES[number])),
+        generatorGenerated: generated,
+        generationError,
+      };
+    });
+    res.json({ success: true, gameId, audit, ready: audit.every(item => item.ready) });
+  } catch (error) {
+    console.error('Challenge audit error:', error);
+    res.status(500).json({ success: false, message: 'Unable to audit challenge setup' });
+  }
+});
 
 const CreateChallengeSchema = z.object({
   gameId: z.string().min(1),
@@ -154,6 +211,9 @@ router.post('/:id/start', authenticate, challengeLimiter, async (req: AuthReques
     if (!pg) { res.status(403).json({ success: false, message: 'Not enrolled in this game' }); return; }
     if (pg.status === 'ELIMINATED') {
       res.status(403).json({ success: false, message: 'Eliminated players cannot participate' }); return;
+    }
+    if (challenge.dayNumber === 7 && pg.status !== 'FINALIST' && pg.status !== 'WINNER') {
+      res.status(403).json({ success: false, message: 'The final challenge is available to finalists only' }); return;
     }
 
     // Check existing attempts
@@ -336,6 +396,12 @@ router.post('/:id/submit-stage', authenticate, challengeLimiter, async (req: Aut
       res.status(400).json({ success: false, message: `Attempt is already ${attempt.status}` }); return;
     }
 
+    if (payload && payload.autoExpired === true) {
+      attempt.status = 'TIME_EXPIRED';
+      await attempt.save();
+      res.status(400).json({ success: false, message: 'Time expired', status: 'TIME_EXPIRED' }); return;
+    }
+
     // Server-side time check — uses server clock, never client
     const now = new Date();
     if (now >= attempt.deadlineAt) {
@@ -484,6 +550,11 @@ router.post('/:id/submit', authenticate, challengeLimiter, async (req: AuthReque
     if (!attempt) { res.status(403).json({ success: false, message: 'Attempt not found' }); return; }
     if (attempt.status !== 'IN_PROGRESS') {
       res.status(400).json({ success: false, message: `Attempt is already ${attempt.status}` }); return;
+    }
+    if (answers && answers.autoExpired === true) {
+      attempt.status = 'TIME_EXPIRED';
+      await attempt.save();
+      res.status(400).json({ success: false, message: 'Time expired', status: 'TIME_EXPIRED' }); return;
     }
     const gameDay = await GameDay.findById(attempt.gameDayId);
     if (gameDay && now >= gameDay.challengeEndTime) {

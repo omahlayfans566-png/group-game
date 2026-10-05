@@ -98,6 +98,7 @@ export const gamesApi = {
 export const challengesApi = {
   getAll: (params?: { gameId?: string; dayNumber?: number }) =>
     axiosInstance.get('/challenges', { params }),
+  audit: (gameId: string) => axiosInstance.get('/challenges/audit', { params: { gameId } }),
   getOne: (id: string) => axiosInstance.get(`/challenges/${id}`),
   create: (data: Record<string, unknown>) => axiosInstance.post('/challenges', data),
   update: (id: string, data: Record<string, unknown>) =>

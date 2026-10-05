@@ -213,8 +213,6 @@ export default function ChallengePage() {
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
-  const maxAttempts = challenge?.maxAttempts ?? 1;
-  const attemptsLeft = Math.max(0, maxAttempts - attemptsUsed);
   const isLocked = phase === 'completed' || phase === 'expired';
   const groupLink = import.meta.env.VITE_GROUP_LINK as string | undefined;
 
@@ -263,21 +261,6 @@ export default function ChallengePage() {
           </div>
         )}
 
-        {/* Attempts */}
-        {phase === 'in_progress' && challenge && (
-          <div className="flex items-center gap-1.5">
-            {Array.from({ length: maxAttempts }, (_, i) => (
-              <div
-                key={i}
-                className={`w-2.5 h-2.5 rounded-full ${i < attemptsUsed ? 'bg-danger-600' : 'bg-cyber-600'}`}
-                title={i < attemptsUsed ? 'Used' : 'Remaining'}
-              />
-            ))}
-            <span className="text-gray-500 text-xs ml-1">
-              {attemptsLeft} left
-            </span>
-          </div>
-        )}
       </header>
 
       <main className="relative z-10 flex-1 max-w-3xl mx-auto w-full px-4 sm:px-6 py-8 space-y-6">
@@ -302,19 +285,7 @@ export default function ChallengePage() {
               </div>
             </div>
 
-            {/* Stats row */}
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                { label: 'Time Limit', value: `${Math.floor((challenge.durationSeconds ?? 0) / 60)}m ${(challenge.durationSeconds ?? 0) % 60 > 0 ? `${(challenge.durationSeconds ?? 0) % 60}s` : ''}`.trim() },
-                { label: 'Max Score', value: `${challenge.maxScore ?? 100} pts` },
-                { label: 'Attempts', value: challenge.maxAttempts ?? 1 },
-              ].map(s => (
-                <div key={s.label} className="arena-card p-4 text-center">
-                  <p className="text-xs text-gray-500 uppercase tracking-wider">{s.label}</p>
-                  <p className="text-white font-bold text-xl mt-1">{s.value}</p>
-                </div>
-              ))}
-            </div>
+            <p className="text-center text-sm text-gray-400">A timed, server-validated challenge awaits. Enter only when you are ready.</p>
 
             {/* Description */}
             {challenge.description && (

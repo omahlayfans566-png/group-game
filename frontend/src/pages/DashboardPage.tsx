@@ -235,104 +235,63 @@ export default function DashboardPage() {
   );
 
   return (
-    <div className="min-h-screen bg-arena-950">
-      <div className="fixed inset-0 bg-grid-pattern pointer-events-none" />
-
-      {/* Nav */}
-      <nav className="relative z-10 flex items-center justify-between px-4 sm:px-6 py-4 border-b border-arena-700 bg-arena-900/60 backdrop-blur">
-        <div className="flex items-center gap-2">
-          <span className="text-cyber-400 text-base">⚔</span>
-          <span className="text-white font-bold tracking-[0.15em] text-sm uppercase">
-            {import.meta.env.VITE_APP_NAME || 'SURVIVAL'}
-          </span>
-        </div>
+    <main className="survival-shell min-h-screen overflow-hidden text-stone-100">
+      <div className="survival-ambient survival-ambient-one" />
+      <div className="survival-ambient survival-ambient-two" />
+      <nav className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-5 py-5 sm:px-8">
         <div className="flex items-center gap-3">
-          <a href={groupLink} target="_blank" rel="noopener noreferrer"
-            className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1">
-            <span>💬</span><span className="hidden sm:inline">Group</span>
-          </a>
-          <button onClick={() => { clearAuth(); navigate('/'); }}
-            className="text-gray-500 hover:text-gray-300 text-xs tracking-widest uppercase transition-colors">
-            Logout
-          </button>
+          <span className="survival-mark">S</span>
+          <span className="text-xs font-semibold uppercase tracking-[0.32em] text-stone-300">{import.meta.env.VITE_APP_NAME || 'Survival'}</span>
+        </div>
+        <div className="flex items-center gap-4">
+          <a href={groupLink} target="_blank" rel="noopener noreferrer" className="text-xs uppercase tracking-[0.2em] text-stone-400 transition hover:text-rose-200">Group</a>
+          <button onClick={() => { clearAuth(); navigate('/'); }} className="text-xs uppercase tracking-[0.2em] text-stone-500 transition hover:text-stone-100">Exit</button>
         </div>
       </nav>
 
-      <div className="relative z-10 max-w-3xl mx-auto px-4 sm:px-6 py-6 space-y-5">
-
-        {/* ── Player identity ── */}
-        <div className="flex items-start justify-between gap-4">
+      <div className="relative z-10 mx-auto max-w-6xl px-5 pb-14 sm:px-8">
+        <section className="survival-intro mb-8 flex flex-col justify-between gap-6 border-b border-white/10 pb-8 sm:flex-row sm:items-end">
           <div>
-            <p className="text-cyber-400 text-xs tracking-[0.3em] uppercase mb-0.5">Welcome back</p>
-            <h1 className="text-2xl sm:text-3xl font-bold text-white">
-              {user?.nickname || user?.playerTag}
-            </h1>
-            <p className="text-gray-600 text-sm font-mono mt-0.5">{user?.playerTag}</p>
+            <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.4em] text-rose-300/80">Welcome back</p>
+            <h1 className="font-display text-4xl font-semibold tracking-tight text-stone-50 sm:text-6xl">{user?.nickname || user?.playerTag}</h1>
+            <p className="mt-3 max-w-md text-sm leading-6 text-stone-400">Seven days. One final victory. Your next challenge is waiting.</p>
           </div>
-        </div>
+          <div className="survival-identity"><span>{user?.playerTag || 'PLAYER'}</span><span className="h-1 w-1 rounded-full bg-rose-300" /><span>Season arena</span></div>
+        </section>
 
-        {(game || days.length > 0) && (
-          <>
-            {/* ── TODAY'S CHALLENGE CARD ── */}
-            <TodayChallengeCard
-              day={todayDay ?? null}
-              challenge={todayChallenge ?? null}
-              attempt={todayAttempt ?? null}
-              state={todayState}
-              groupLink={groupLink}
-              nowMs={nowMs}
-              onEnter={() => todayChallenge && navigate(`/challenge/${todayChallenge._id}`)}
-              onTimerExpire={loadDashboard}
-            />
+        {(game || days.length > 0) && <>
+          <TodayChallengeCard
+            day={todayDay ?? null}
+            challenge={todayChallenge ?? null}
+            attempt={todayAttempt ?? null}
+            state={todayState}
+            groupLink={groupLink}
+            nowMs={nowMs}
+            onEnter={() => todayChallenge && navigate(`/challenge/${todayChallenge._id}`)}
+            onTimerExpire={loadDashboard}
+          />
 
-            {/* ── WEEKLY SCHEDULE ── */}
-            <div className="arena-card p-5 space-y-4">
-              <div className="flex items-center justify-between">
-                <p className="section-title mb-0">SEVEN DAYS / SURVIVAL SCHEDULE</p>
-                <p className="text-xs text-gray-600 font-mono hidden sm:block">{displayGame?.name || 'SEVEN DAYS ARENA'}</p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                {Array.from({ length: 7 }, (_, i) => {
-                  const dayNum = i + 1;
-                  const day = days.find(d => d.dayNumber === dayNum);
-                  const state = day ? computeDayState(day) : 'LOCKED';
-
-                  return (
-                    <WeekDayRow
-                      key={dayNum}
-                      dayNumber={dayNum}
-                      shortName={DAY_NAMES_SHORT[i]}
-                      longName={DAY_NAMES_LONG[i]}
-                      day={day}
-                      state={state}
-                      isSunday={dayNum === 7}
-                      nowMs={nowMs}
-                      isCurrentDay={Boolean(todayDay && day && todayDay._id === day._id)}
-                    />
-                  );
-                })}
-              </div>
-
+          <section className="mt-12">
+            <div className="mb-6 flex items-end justify-between gap-4">
+              <div><p className="text-[11px] uppercase tracking-[0.35em] text-rose-300/80">The journey</p><h2 className="font-display mt-2 text-3xl text-stone-100 sm:text-4xl">Your seven-day journey</h2></div>
+              <p className="hidden text-right text-xs uppercase tracking-[0.2em] text-stone-500 sm:block">{displayGame?.name || 'The arena'}<br />Nigeria time</p>
             </div>
-
-            {/* ── Group footer ── */}
-            <div className="arena-card p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div>
-                <p className="text-white font-semibold text-sm">Official Results Channel</p>
-                <p className="text-gray-500 text-xs mt-0.5">
-                  All results and announcements are made in the group by the admin.
-                </p>
-              </div>
-              <a href={groupLink} target="_blank" rel="noopener noreferrer"
-                className="btn-primary text-sm px-5 py-2.5 flex items-center gap-2 shrink-0">
-                <span>💬</span> GO TO THE GROUP
-              </a>
+            <div className="survival-journey">
+              {Array.from({ length: 7 }, (_, i) => {
+                const dayNum = i + 1;
+                const day = days.find(d => d.dayNumber === dayNum);
+                return <WeekDayRow key={dayNum} dayNumber={dayNum} shortName={DAY_NAMES_SHORT[i]} longName={DAY_NAMES_LONG[i]} day={day} state={day ? computeDayState(day) : 'LOCKED'} isSunday={dayNum === 7} nowMs={nowMs} isCurrentDay={Boolean(todayDay && day && todayDay._id === day._id)} />;
+              })}
             </div>
-          </>
-        )}
+          </section>
+
+          <div className="mt-12 flex flex-col items-start justify-between gap-5 border-t border-white/10 pt-6 sm:flex-row sm:items-center">
+            <div><p className="font-display text-xl text-stone-200">Official results live in the group.</p><p className="mt-1 text-sm text-stone-500">Keep your eyes on the arena.</p></div>
+            <a href={groupLink} target="_blank" rel="noopener noreferrer" className="survival-link">Enter the group <span>↗</span></a>
+          </div>
+        </>}
       </div>
-    </div>
+    </main>
   );
 }
 
@@ -364,103 +323,54 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, nowMs, 
   const longName = DAY_NAMES_LONG[dayIndex] ?? 'Today';
   const startTime = day ? fmtTime(day.challengeStartTime) : '—';
   const endTime = day ? fmtTime(day.challengeEndTime) : '—';
-  const maxMin = challenge ? Math.round(challenge.durationSeconds / 60) : 0;
 
   const borderClass =
-    state === 'COMPLETED' ? 'border-emerald-700 shadow-[0_0_20px_rgba(16,185,129,0.1)]' :
-      state === 'TIME_EXPIRED' ? 'border-amber-700 shadow-[0_0_20px_rgba(245,158,11,0.1)]' :
-        state === 'IN_PROGRESS' ? 'border-cyber-600 shadow-[0_0_20px_rgba(0,102,102,0.2)]' :
-          state === 'OPEN' ? 'border-cyber-700' :
-            'border-arena-600';
+    state === 'COMPLETED' ? 'border-emerald-200/25' :
+      state === 'TIME_EXPIRED' ? 'border-amber-200/25' :
+        state === 'IN_PROGRESS' ? 'border-rose-200/40' :
+          state === 'OPEN' ? 'border-rose-200/35' :
+            'border-white/10';
 
   return (
-    <div className={`arena-card p-5 sm:p-6 border ${borderClass} space-y-4`}>
+    <div className={`survival-hero relative overflow-hidden rounded-[2rem] border p-6 sm:p-10 ${borderClass} space-y-7`}>
+      <div className="survival-hero-art" aria-hidden="true"><span /><span /><span /></div>
       {/* Header */}
-      <div className="flex items-start justify-between gap-3">
+      <div className="relative z-10 flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs text-gray-500 uppercase tracking-[0.25em]">Today's Challenge</p>
-          <h2 className="text-xl sm:text-2xl font-bold text-white mt-0.5">{longName}</h2>
-          {challenge && (
-            <p className="text-gray-400 text-sm mt-0.5">{challenge.title}</p>
-          )}
+          <p className="text-[11px] font-semibold uppercase tracking-[0.35em] text-rose-200/80">Today's challenge</p>
+          <h2 className="font-display mt-3 text-5xl tracking-wide text-stone-50 sm:text-7xl">{longName}</h2>
         </div>
-        <div className="text-right shrink-0">
-          <p className={`text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border
-            ${state === 'COMPLETED' ? 'bg-emerald-900/50 border-emerald-700 text-emerald-300' :
-              state === 'TIME_EXPIRED' ? 'bg-amber-900/50 border-amber-700 text-amber-300' :
-                state === 'IN_PROGRESS' ? 'bg-cyber-900/50 border-cyber-600 text-cyber-300' :
-                  state === 'OPEN' ? 'bg-cyber-900/30 border-cyber-700 text-cyber-400' :
-                    state === 'CLOSED' ? 'bg-arena-700 border-arena-600 text-gray-400' :
-                      'bg-arena-800 border-arena-700 text-gray-500'}`}>
-            {state === 'COMPLETED' ? '✓ COMPLETED' :
-              state === 'TIME_EXPIRED' ? '⏰ TIME EXPIRED' :
-                state === 'IN_PROGRESS' ? '● LIVE' :
-                  state === 'OPEN' ? '● AVAILABLE' :
-                    state === 'CLOSED' ? 'CLOSED' :
-                      state === 'UPCOMING' ? 'UPCOMING' : 'LOCKED'}
-          </p>
-        </div>
+        <p className="survival-status">{state === 'COMPLETED' ? 'Completed' : state === 'TIME_EXPIRED' ? 'Time is up' : state === 'IN_PROGRESS' ? 'Live now' : state === 'OPEN' ? 'Available' : state === 'CLOSED' ? 'Closed' : 'Locked'}</p>
       </div>
 
-      {/* Schedule info */}
-      {day && (
-        <div className="grid grid-cols-2 gap-3 text-xs">
-          <div className="bg-arena-900 rounded-lg px-3 py-2.5">
-            <p className="text-gray-600 uppercase tracking-wider mb-0.5">Opens</p>
-            <p className="text-white font-mono font-bold text-sm">{startTime}</p>
-          </div>
-          <div className="bg-arena-900 rounded-lg px-3 py-2.5">
-            <p className="text-gray-600 uppercase tracking-wider mb-0.5">Global Close</p>
-            <p className="text-white font-mono font-bold text-sm">{endTime}</p>
-          </div>
-          {maxMin > 0 && (
-            <div className="bg-arena-900 rounded-lg px-3 py-2.5">
-              <p className="text-gray-600 uppercase tracking-wider mb-0.5">Max Personal Time</p>
-              <p className="text-white font-mono font-bold text-sm">{maxMin} min</p>
-            </div>
-          )}
-          {challenge && (
-            <div className="bg-arena-900 rounded-lg px-3 py-2.5">
-              <p className="text-gray-600 uppercase tracking-wider mb-0.5">Difficulty</p>
-              <p className={`font-bold text-sm ${challenge.difficulty === 'HARD' ? 'text-orange-400' :
-                challenge.difficulty === 'EXTREME' ? 'text-danger-400' :
-                  'text-amber-400'}`}>
-                {challenge.difficulty}
-              </p>
-            </div>
-          )}
-        </div>
-      )}
+      {day && <div className="relative z-10 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs uppercase tracking-[0.18em] text-stone-400"><span>{startTime} – {endTime}</span><span className="text-rose-200/60">Africa / Lagos</span></div>}
 
       {/* ── State-specific content ── */}
 
       {/* LOCKED / UPCOMING — not yet open */}
       {(state === 'LOCKED' || state === 'UPCOMING') && day && (
-        <div className="bg-arena-900 border border-arena-700 rounded-lg px-4 py-3 text-center space-y-1">
-          <p className="text-gray-500 text-sm">🔒 LOCKED</p>
+        <div className="relative z-10 space-y-4 rounded-2xl border border-white/10 bg-black/25 px-5 py-6 text-center sm:px-8">
+          <p className="text-sm uppercase tracking-[0.25em] text-stone-300">The vault is sealed</p>
           {nowMs !== null && (
             <>
-              <p className="text-[10px] text-gray-600 uppercase tracking-[0.25em] pt-2">Game starts in</p>
-              <p className="font-mono text-3xl sm:text-4xl font-bold tracking-widest text-cyber-300">
+              <p className="text-[10px] uppercase tracking-[0.35em] text-rose-200/70">Opens in</p>
+              <p className="survival-countdown">
                 {formatCountdown(day.challengeStartTime, nowMs)}
               </p>
             </>
           )}
-          <p className="text-gray-600 text-xs">{startTime} – {endTime}</p>
         </div>
       )}
 
       {/* OPEN — player hasn't started yet */}
       {state === 'OPEN' && challenge && !attempt && (
         <div className="space-y-3">
-          <div className="bg-cyber-900/20 border border-cyber-800 rounded-lg px-4 py-3">
-            <p className="text-cyber-300 text-sm font-semibold">⚡ Challenge window is open</p>
-            <p className="text-gray-500 text-xs mt-0.5">
-              Once you start, your personal timer begins. The game closes globally at {endTime} regardless.
-            </p>
+          <div className="rounded-2xl border border-rose-300/30 bg-rose-950/30 px-5 py-4">
+            <p className="text-sm font-semibold text-rose-100">The vault is open.</p>
+            <p className="mt-1 text-xs text-stone-400">Your personal timer begins when you enter. The arena closes at {endTime}.</p>
           </div>
-          <button onClick={onEnter} className="btn-primary w-full py-4 text-base tracking-wide">
-            ⚡ START GAME
+          <button onClick={onEnter} className="survival-cta w-full py-4 text-base">
+            Start challenge <span>→</span>
           </button>
         </div>
       )}
@@ -468,9 +378,9 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, nowMs, 
       {/* IN_PROGRESS — player has active attempt */}
       {state === 'IN_PROGRESS' && attempt && (
         <div className="space-y-3">
-          <div className="bg-amber-900/20 border border-amber-800 rounded-lg px-4 py-3 flex items-center justify-between gap-4">
+          <div className="flex items-center justify-between gap-4 rounded-2xl border border-amber-200/20 bg-amber-950/20 px-5 py-4">
             <div>
-              <p className="text-amber-300 text-xs font-bold uppercase tracking-widest mb-1">Your personal timer</p>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-amber-100/70">Your personal timer</p>
               <CountdownTimer
                 deadlineAt={attempt.deadlineAt}
                 onExpire={onTimerExpire}
@@ -483,8 +393,8 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, nowMs, 
             </div>
           </div>
           <div className="flex gap-3">
-            <button onClick={onEnter} className="btn-primary flex-1 py-3 text-sm">
-              ⚡ CONTINUE GAME
+            <button onClick={onEnter} className="survival-cta flex-1 py-3 text-sm">
+              Continue challenge <span>→</span>
             </button>
           </div>
           <p className="text-gray-600 text-xs text-center">
@@ -496,12 +406,12 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, nowMs, 
       {/* Locked attempt: submitted or expired */}
       {(state === 'COMPLETED' || state === 'TIME_EXPIRED') && (
         <div className="space-y-3">
-          <div className={`rounded-lg px-4 py-4 text-center space-y-2 ${state === 'COMPLETED'
-            ? 'bg-emerald-900/20 border border-emerald-800'
-            : 'bg-arena-900 border border-arena-700'
+          <div className={`rounded-2xl px-5 py-5 text-center space-y-2 ${state === 'COMPLETED'
+            ? 'bg-emerald-950/20 border border-emerald-200/20'
+            : 'bg-black/20 border border-white/10'
             }`}>
-            <p className={`text-base font-bold ${state === 'COMPLETED' ? 'text-emerald-400' : 'text-amber-300'}`}>
-              {state === 'COMPLETED' ? '✓ SUBMISSION RECEIVED' : '⏱ TIME IS UP'}
+            <p className={`font-display text-2xl tracking-wide ${state === 'COMPLETED' ? 'text-emerald-200' : 'text-amber-100'}`}>
+              {state === 'COMPLETED' ? 'Submission received' : 'Time is up'}
             </p>
             <p className="text-gray-400 text-sm">
               Thank you for participating. Your challenge has been locked.
@@ -510,9 +420,8 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, nowMs, 
               Please return to the group for your official result.
             </p>
           </div>
-          <a href={groupLink} target="_blank" rel="noopener noreferrer"
-            className="btn-primary w-full py-3 text-sm flex items-center justify-center gap-2">
-            <span>💬</span> GO TO THE GROUP
+          <a href={groupLink} target="_blank" rel="noopener noreferrer" className="survival-link w-full justify-center">
+            Official results <span>↗</span>
           </a>
         </div>
       )}
@@ -520,13 +429,12 @@ function TodayChallengeCard({ day, challenge, attempt, state, groupLink, nowMs, 
       {/* CLOSED — global window ended, player never started */}
       {state === 'CLOSED' && (
         <div className="space-y-3">
-          <div className="bg-arena-900 border border-arena-700 rounded-lg px-4 py-3 text-center">
-            <p className="text-gray-400 text-sm">This challenge has closed.</p>
-            <p className="text-gray-600 text-xs mt-1">Please return to the group for the official result.</p>
+          <div className="rounded-2xl border border-white/10 bg-black/20 px-5 py-5 text-center">
+            <p className="font-display text-2xl tracking-wide text-stone-200">The vault is sealed.</p>
+            <p className="mt-1 text-xs text-stone-500">The next scheduled challenge will appear in the journey.</p>
           </div>
-          <a href={groupLink} target="_blank" rel="noopener noreferrer"
-            className="btn-ghost w-full py-3 text-sm flex items-center justify-center gap-2">
-            <span>💬</span> GO TO THE GROUP
+          <a href={groupLink} target="_blank" rel="noopener noreferrer" className="survival-link w-full justify-center">
+            Return to the group <span>↗</span>
           </a>
         </div>
       )}
@@ -552,69 +460,55 @@ function WeekDayRow({ dayNumber, shortName, longName, day, state, isSunday, nowM
   const isLive = state === 'IN_PROGRESS' || state === 'OPEN';
 
   return (
-    <div className={`flex min-h-[132px] flex-col items-start justify-between gap-3 px-4 py-4 rounded-lg border transition-colors
-      ${isCurrentDay ? 'ring-1 ring-cyber-400/70 shadow-[0_0_24px_rgba(0,180,180,0.12)]' : ''}
-      ${state === 'COMPLETED' ? 'bg-emerald-900/10 border-emerald-900' :
-        isExpired ? 'bg-amber-900/10 border-amber-900' :
-          isLive ? 'bg-cyber-900/15 border-cyber-800' :
-            isSunday ? 'bg-gold-900/10 border-gold-900/30' :
-              'bg-arena-900/50 border-arena-800'}`}>
+    <div className={`survival-stage relative flex min-h-[152px] flex-col items-start justify-between gap-4 px-4 py-5 transition-all
+      ${isCurrentDay ? 'survival-stage-current' : ''}
+      ${state === 'COMPLETED' ? 'survival-stage-complete' : isExpired ? 'survival-stage-expired' : isLive ? 'survival-stage-live' : ''}`}>
 
       <div className="flex w-full items-start justify-between gap-2">
         {/* Day number badge */}
-        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0
-        ${state === 'COMPLETED' ? 'bg-emerald-900 text-emerald-300 border border-emerald-700' :
-            isExpired ? 'bg-amber-900 text-amber-300 border border-amber-700' :
-              isLive ? 'bg-cyber-900 text-cyber-300 border border-cyber-700' :
-                isSunday ? 'bg-gold-700 text-arena-950 border border-gold-500' :
-                  'bg-arena-700 text-gray-400 border border-arena-600'}`}>
+        <div className={`survival-stage-number ${isSunday ? 'survival-stage-final' : ''}`}>
           {dayNumber}
         </div>
 
-        {isCurrentDay && <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-cyber-300">Current day</span>}
+        {isCurrentDay && <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-rose-200">Today</span>}
       </div>
 
       {/* Day name + times */}
       <div className="w-full min-w-0">
         <div className="flex items-baseline gap-2">
-          <span className={`text-sm font-semibold ${state === 'COMPLETED' ? 'text-emerald-300' : isExpired ? 'text-amber-300' : isLive ? 'text-cyber-300' : isSunday ? 'text-gold-300' : 'text-gray-300'}`}>
-            {longName}
+          <span className="font-display text-2xl tracking-wide text-stone-100">
+            {shortName}
           </span>
         </div>
         {day ? (
           <>
-            <p className="text-[11px] text-gray-600 font-mono mt-1">
+            <p className="text-[10px] uppercase tracking-[0.16em] text-stone-500 mt-1">
               {fmtTime(day.challengeStartTime)} – {fmtTime(day.challengeEndTime)}
             </p>
             {isCurrentDay && state === 'UPCOMING' && nowMs !== null && (
-              <p className="text-[10px] text-cyber-400 font-mono uppercase tracking-wider mt-2">
-                Starts in {formatCountdown(day.challengeStartTime, nowMs)}
+              <p className="text-[10px] text-rose-200/80 font-mono uppercase tracking-wider mt-2">
+                {formatCountdown(day.challengeStartTime, nowMs)}
               </p>
             )}
           </>
         ) : (
-          <p className="text-[11px] text-gray-700 mt-0.5">Schedule TBC</p>
+          <p className="text-[11px] text-stone-600 mt-0.5">Schedule pending</p>
         )}
       </div>
 
       {(state === 'LOCKED' || state === 'UPCOMING') && (
-        <div className="w-full rounded border border-arena-700/80 bg-arena-950/70 px-3 py-2 space-y-1.5" aria-label="Game hidden until it opens">
-          <p className="text-[9px] uppercase tracking-[0.2em] text-gray-600">Game hidden</p>
-          <div className="space-y-1 opacity-60 blur-[2px]" aria-hidden="true">
-            <div className="h-1.5 w-4/5 rounded bg-cyber-900" />
-            <div className="h-1.5 w-3/5 rounded bg-danger-900" />
+        <div className="w-full space-y-2" aria-label="Game hidden until it opens">
+          <p className="text-[9px] uppercase tracking-[0.2em] text-stone-600">Locked</p>
+          <div className="survival-blur-preview" aria-hidden="true">
+            <span /><span /><span />
           </div>
         </div>
       )}
 
       {/* Status indicator */}
       <div className="flex items-center gap-1.5 shrink-0">
-        <span className={`text-base ${state === 'COMPLETED' ? 'text-emerald-400' : isExpired ? 'text-amber-400' : isLive ? 'text-cyber-400' : 'text-gray-600'}`}>
-          {dayStateIcon(state)}
-        </span>
-        <span className={`text-[10px] font-bold uppercase tracking-widest hidden sm:block
-          ${state === 'COMPLETED' ? 'text-emerald-400' : isExpired ? 'text-amber-400' : isLive ? 'text-cyber-400' : 'text-gray-600'}`}>
-          {dayStateLabel(state)}
+        <span className={`text-[10px] font-semibold uppercase tracking-[0.2em] ${isLive ? 'text-rose-200' : state === 'COMPLETED' ? 'text-emerald-200' : 'text-stone-500'}`}>
+          {state === 'COMPLETED' ? 'Complete' : isExpired ? 'Closed' : isLive ? 'Open' : 'Locked'}
         </span>
       </div>
     </div>

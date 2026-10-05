@@ -12,11 +12,25 @@ export type ChallengeType =
   | 'COMBINATION_CODE'
   | 'MULTI_STAGE'
   | 'TIMED_REASONING'
-  | 'TEST_CHALLENGE';
+  | 'TEST_CHALLENGE'
+  | 'SEQUENCE'
+  | 'CODE_BREAK'
+  | 'MEMORY'
+  | 'PATTERN'
+  | 'ARRANGEMENT'
+  | 'HIDDEN_OBJECT'
+  | 'LOGIC'
+  | 'BROKEN_MACHINE'
+  | 'PATTERN_VAULT'
+  | 'MEMORY_VAULT'
+  | 'CIPHER_ROOM'
+  | 'RULE_TRAP'
+  | 'BLACK_VAULT'
+  | 'FINAL_VAULT';
 
 export type Difficulty = 'EASY' | 'MEDIUM' | 'HARD' | 'EXTREME';
 
-export type ScoringMethod = 'BINARY' | 'PARTIAL' | 'TIME_BONUS' | 'STAGE_BASED';
+export type ScoringMethod = 'BINARY' | 'PARTIAL' | 'TIME_BONUS' | 'STAGE_BASED' | 'ATTEMPT_PENALTY';
 
 export type TieBreakerMethod = 'FASTEST_TIME' | 'SECONDARY_CHALLENGE' | 'ADMIN_OVERRIDE';
 
@@ -74,6 +88,20 @@ const ChallengeSchema = new Schema<IChallenge>(
         'MULTI_STAGE',
         'TIMED_REASONING',
         'TEST_CHALLENGE',
+        'SEQUENCE',
+        'CODE_BREAK',
+        'MEMORY',
+        'PATTERN',
+        'ARRANGEMENT',
+        'HIDDEN_OBJECT',
+        'LOGIC',
+        'BROKEN_MACHINE',
+        'PATTERN_VAULT',
+        'MEMORY_VAULT',
+        'CIPHER_ROOM',
+        'RULE_TRAP',
+        'BLACK_VAULT',
+        'FINAL_VAULT',
       ],
       default: 'TEST_CHALLENGE',
     },
@@ -81,7 +109,7 @@ const ChallengeSchema = new Schema<IChallenge>(
     maxAttempts: { type: Number, default: 1, min: 1 },
     scoringMethod: {
       type: String,
-      enum: ['BINARY', 'PARTIAL', 'TIME_BONUS', 'STAGE_BASED'],
+      enum: ['BINARY', 'PARTIAL', 'TIME_BONUS', 'STAGE_BASED', 'ATTEMPT_PENALTY'],
       default: 'BINARY',
     },
     tieBreakerMethod: {

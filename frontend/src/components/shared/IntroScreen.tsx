@@ -37,12 +37,6 @@ export default function IntroScreen({ onComplete }: Props) {
     }, REDUCED ? 350 : 1900);
   }, [onComplete]);
 
-  const skipIntro = useCallback(() => {
-    clearAllTimers();
-    setSplitDone(true);
-    onComplete();
-  }, [onComplete]);
-
   useEffect(() => {
     addTimer(() => setPhase('many'), REDUCED ? 1800 : 3000);
     addTimer(() => setPhase('winner'), REDUCED ? 3600 : 5000);
@@ -51,14 +45,20 @@ export default function IntroScreen({ onComplete }: Props) {
     return clearAllTimers;
   }, [finishIntro]);
 
-  // Keyboard skip (Enter / Space / Escape)
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (['Enter', ' ', 'Escape'].includes(e.key)) skipIntro();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, []);
+
+  useEffect(() => {
+    const blockUnderlyingKeyboard = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [skipIntro]);
+    window.addEventListener('keydown', blockUnderlyingKeyboard, true);
+    return () => window.removeEventListener('keydown', blockUnderlyingKeyboard, true);
+  }, []);
 
   if (splitDone) return null;
 
@@ -126,17 +126,6 @@ export default function IntroScreen({ onComplete }: Props) {
         }}
         aria-hidden="true"
       />
-
-      {/* ── Skip button ── */}
-      {phase !== 'opening' && (
-        <button
-          onClick={skipIntro}
-          className="absolute bottom-8 right-6 z-30 text-gray-400 hover:text-white text-xs tracking-[0.2em] uppercase transition-colors focus:outline-none focus:ring-1 focus:ring-gray-500 rounded px-2 py-1"
-          aria-label="Skip intro"
-        >
-          SKIP
-        </button>
-      )}
 
       <style>{`
         @keyframes introMessageIn {

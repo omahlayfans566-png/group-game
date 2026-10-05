@@ -12,7 +12,14 @@ export type PuzzleType =
   | 'ARRANGEMENT'
   | 'HIDDEN_OBJECT'
   | 'LOGIC'
-  | 'MULTI_STAGE';
+  | 'MULTI_STAGE'
+  | 'BROKEN_MACHINE'
+  | 'PATTERN_VAULT'
+  | 'MEMORY_VAULT'
+  | 'CIPHER_ROOM'
+  | 'RULE_TRAP'
+  | 'BLACK_VAULT'
+  | 'FINAL_VAULT';
 
 // ─── Display data shapes (one per puzzle type) ────────────────────────────────
 
