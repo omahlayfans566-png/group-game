@@ -8,6 +8,7 @@ import compression from 'compression';
 import connectDB from './config/db';
 import { initSocket } from './services/socketService';
 import { apiLimiter } from './middleware/rateLimiter';
+import { seedGameIfNeeded } from './services/gameSeeder';
 
 import authRoutes from './routes/auth';
 import gameRoutes from './routes/games';
@@ -78,7 +79,7 @@ const HOST = '0.0.0.0';
 
 async function start(): Promise<void> {
   await connectDB();
-
+  await seedGameIfNeeded();
   initSocket(httpServer);
 
   httpServer.listen(PORT, HOST, () => {

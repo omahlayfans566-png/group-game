@@ -499,4 +499,190 @@ router.patch('/:gameId/announcements/:annId/publish', authenticate, requireAdmin
   }
 });
 
+// ─── ADMIN GAME CONTROL — Open / Close a day ─────────────────────────────────
+
+// POST /api/games/:gameId/days/:dayId/open  (admin only)
+// Opens a game day for players. Optionally closes any other open day first.
+router.post('/:gameId/days/:dayId/open', authenticate, requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { gameId, dayId } = req.params;
+    const { forceCloseOthers } = req.body as { forceCloseOthers?: boolean };
+
+    const day = await GameDay.findOne({ _id: dayId, gameId });
+    if (!day) { res.status(404).json({ success: false, message: 'Day not found' }); return; }
+
+    // Check if another day is already open
+    const alreadyOpen = await GameDay.findOne({ gameId, status: 'OPEN', _id: { $ne: dayId } });
+    if (alreadyOpen && !forceCloseOthers) {
+      res.status(409).json({
+        success: false,
+        message: `Day ${alreadyOpen.dayNumber} is currently open. Set forceCloseOthers:true to close it and open this one.`,
+        openDay: { _id: alreadyOpen._id, dayNumber: alreadyOpen.dayNumber, dayOfWeek: alreadyOpen.dayOfWeek },
+      });
+      return;
+    }
+
+    // Close any other open day + its challenge
+    if (alreadyOpen) {
+      await GameDay.findByIdAndUpdate(alreadyOpen._id, { status: 'CLOSED' });
+      await Challenge.updateMany({ gameDayId: alreadyOpen._id }, { isOpen: false });
+    }
+
+    // Set this day to OPEN + set challenge window from now to far future (admin closes manually)
+    const startNow = new Date();
+    const farEnd = new Date(startNow.getTime() + 24 * 60 * 60 * 1000); // 24h — admin closes manually
+
+    await GameDay.findByIdAndUpdate(dayId, {
+      status: 'OPEN',
+      challengeStartTime: startNow,
+      challengeEndTime: farEnd,
+    });
+
+    // Open + activate the challenge(s) for this day
+    await Challenge.updateMany({ gameDayId: dayId }, { isOpen: true, isActive: true });
+
+    // Update game currentDay
+    await Game.findByIdAndUpdate(gameId, { currentDay: day.dayNumber, status: 'ACTIVE' });
+
+    // Broadcast via socket
+    const { emitToGame } = await import('../services/socketService');
+    emitToGame(gameId, 'game:day:opened', { dayNumber: day.dayNumber });
+
+    res.json({ success: true, message: `Day ${day.dayNumber} is now OPEN for players.`, dayNumber: day.dayNumber });
+  } catch (err) {
+    console.error('Open day error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// POST /api/games/:gameId/days/:dayId/close  (admin only)
+// Closes a game day. active attempts continue; only new starts are blocked.
+router.post('/:gameId/days/:dayId/close', authenticate, requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { gameId, dayId } = req.params;
+    const { endActiveAttempts } = req.body as { endActiveAttempts?: boolean };
+
+    const day = await GameDay.findOne({ _id: dayId, gameId });
+    if (!day) { res.status(404).json({ success: false, message: 'Day not found' }); return; }
+
+    // Close the day and its challenges (no new starts)
+    await GameDay.findByIdAndUpdate(dayId, { status: 'CLOSED', challengeEndTime: new Date() });
+    await Challenge.updateMany({ gameDayId: dayId }, { isOpen: false });
+
+    // Optionally expire all active attempts immediately
+    if (endActiveAttempts) {
+      await ChallengeAttempt.updateMany(
+        { gameDayId: dayId, status: 'IN_PROGRESS' },
+        { status: 'TIME_EXPIRED', completedAt: new Date() }
+      );
+    }
+
+    const { emitToGame } = await import('../services/socketService');
+    emitToGame(gameId, 'game:day:closed', { dayNumber: day.dayNumber });
+
+    res.json({
+      success: true,
+      message: `Day ${day.dayNumber} is now CLOSED.${endActiveAttempts ? ' Active attempts ended.' : ' Active attempts may continue until their personal timer expires.'}`,
+    });
+  } catch (err) {
+    console.error('Close day error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// GET /api/games/:gameId/days/:dayId/live-stats  (admin only)
+// Returns live player counts for a game day
+router.get('/:gameId/days/:dayId/live-stats', authenticate, requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { gameId, dayId } = req.params;
+
+    const challenges = await Challenge.find({ gameDayId: dayId });
+    const challengeIds = challenges.map(c => c._id);
+
+    const [submitted, active, expired, totalPlayers] = await Promise.all([
+      ChallengeAttempt.countDocuments({ gameDayId: dayId, status: 'COMPLETED' }),
+      ChallengeAttempt.countDocuments({ gameDayId: dayId, status: 'IN_PROGRESS' }),
+      ChallengeAttempt.countDocuments({ gameDayId: dayId, status: 'TIME_EXPIRED' }),
+      PlayerGame.countDocuments({ gameId, status: { $in: ['ACTIVE', 'IN_PROGRESS', 'COMPLETED', 'SAFE', 'FINALIST', 'WINNER'] } }),
+    ]);
+
+    const started = submitted + active + expired;
+    const pending = Math.max(0, totalPlayers - started);
+
+    res.json({ success: true, stats: { totalPlayers, started, submitted, active, expired, pending } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// GET /api/games/active-day  (player + admin) — returns the currently open day+challenge
+router.get('/active-day', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const game = await Game.findOne({ status: 'ACTIVE' });
+    if (!game) { res.json({ success: true, activeDay: null }); return; }
+
+    const openDay = await GameDay.findOne({ gameId: game._id, status: 'OPEN' });
+    if (!openDay) { res.json({ success: true, game: { _id: game._id, name: game.name }, activeDay: null }); return; }
+
+    const challenges = await Challenge.find({ gameDayId: openDay._id, isActive: true })
+      .select('-puzzleConfig');
+
+    res.json({
+      success: true,
+      game: { _id: game._id, name: game.name, groupLink: game.groupLink },
+      activeDay: openDay,
+      challenges,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// GET /api/games/all-days  (player) — returns all 7 days with their status + challenge meta
+router.get('/all-days', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const game = await Game.findOne({ status: 'ACTIVE' });
+    if (!game) { res.json({ success: true, game: null, days: [] }); return; }
+
+    const days = await GameDay.find({ gameId: game._id }).sort({ dayNumber: 1 });
+
+    // Get challenges — strip puzzle config for players
+    const challenges = await Challenge.find({ gameId: game._id, isActive: true })
+      .select('-puzzleConfig')
+      .sort({ dayNumber: 1 });
+
+    // Build day map with challenge info
+    const dayData = days.map(d => {
+      const ch = challenges.find(c => c.gameDayId.toString() === d._id.toString());
+      return {
+        _id: d._id,
+        dayNumber: d.dayNumber,
+        dayOfWeek: d.dayOfWeek,
+        status: d.status,     // OPEN | CLOSED | UPCOMING | COMPLETED
+        challenge: ch ? {
+          _id: ch._id,
+          title: ch.title,
+          description: ch.description,
+          difficulty: ch.difficulty,
+          challengeType: ch.challengeType,
+          durationSeconds: ch.durationSeconds,
+          maxAttempts: ch.maxAttempts,
+          totalStages: ch.totalStages,
+          maxScore: ch.maxScore,
+          isOpen: ch.isOpen,
+          isActive: ch.isActive,
+        } : null,
+      };
+    });
+
+    res.json({
+      success: true,
+      game: { _id: game._id, name: game.name, groupLink: game.groupLink },
+      days: dayData,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 export default router;

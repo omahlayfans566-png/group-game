@@ -1,229 +1,124 @@
 /**
- * DashboardPage — upgraded with:
- *  • Weekly 7-day schedule showing actual start/end times from backend
- *  • Per-day completion status (green check = attempt locked, from DB)
- *  • Prominent current-day challenge card with correct timer behavior
- *  • Personal timer that survives refresh / tab-close (server deadline)
- *  • Global window enforcement on display
- *  • No scores, rankings, or elimination info shown to players
+ * DashboardPage — Admin-controlled game architecture.
+ * Always shows all 7 games. Locked = blurred. No countdown.
+ * Admin OPEN/CLOSE is the sole authority.
  */
-
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { gamesApi, challengesApi } from '../lib/api';
 import { getSocket, joinGameRoom } from '../lib/socket';
 import CountdownTimer from '../components/shared/CountdownTimer';
-import { Game, GameDay, Challenge, ChallengeAttempt } from '../types';
+import { Challenge, ChallengeAttempt, Announcement } from '../types';
+import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const DAY_THEMES = [
+  { name: 'THE BROKEN MACHINE', type: 'BROKEN_MACHINE', icon: '⚙', desc: 'Repair the circuit. Rotate nodes to restore the signal path.' },
+  { name: 'THE PATTERN VAULT', type: 'PATTERN_VAULT', icon: '◆', desc: 'Discover hidden transformation rules. Reconstruct the vault states.' },
+  { name: 'THE MEMORY VAULT', type: 'MEMORY_VAULT', icon: '🧠', desc: 'Memorise the room. Answer from memory.' },
+  { name: 'THE CIPHER ROOM', type: 'CIPHER_ROOM', icon: '🔐', desc: 'Four connected locks. Each answer feeds the next.' },
+  { name: 'THE RULE TRAP', type: 'RULE_TRAP', icon: '⚡', desc: 'Discover the hidden rule using limited probes.' },
+  { name: 'THE BLACK VAULT', type: 'BLACK_VAULT', icon: '🕳', desc: 'Five connected stages. Earn every key.' },
+  { name: 'THE FINAL VAULT', type: 'FINAL_VAULT', icon: '🏆', desc: 'Championship. Five stages. One winner.' },
+];
 
-const DAY_NAMES_SHORT = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
-const DAY_NAMES_LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-
-function fmtTime(iso: string): string {
-  try {
-    return new Intl.DateTimeFormat('en-NG', {
-      timeZone: 'Africa/Lagos', hour: 'numeric', minute: '2-digit', hour12: true,
-    }).format(new Date(iso));
-  }
-  catch { return '—'; }
+interface DayData {
+  _id: string;
+  dayNumber: number;
+  dayOfWeek: string;
+  status: 'OPEN' | 'CLOSED' | 'UPCOMING' | 'COMPLETED';
+  challenge: {
+    _id: string; title: string; description: string;
+    difficulty: string; challengeType: string;
+    durationSeconds: number; maxAttempts: number;
+    totalStages: number; maxScore: number;
+    isOpen: boolean; isActive: boolean;
+  } | null;
 }
 
-function formatCountdown(targetIso: string, nowMs: number): string {
-  const totalSeconds = Math.max(0, Math.ceil((new Date(targetIso).getTime() - nowMs) / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return [hours, minutes, seconds].map(value => String(value).padStart(2, '0')).join(':');
+interface GameInfo {
+  _id: string;
+  name: string;
+  groupLink: string;
 }
-
-/** Map GameDay.status + attempt status → a player-visible day state */
-type DayState =
-  | 'LOCKED'        // future, not yet open
-  | 'UPCOMING'      // open day, no challenge found or not started
-  | 'IN_PROGRESS'   // player has an active attempt right now
-  | 'COMPLETED'     // player's attempt was submitted and locked
-  | 'TIME_EXPIRED'  // player's attempt expired and was locked
-  | 'CLOSED'        // global window closed, player never started
-  | 'OPEN';         // game window is open, player can enter
-
-function dayStateColor(s: DayState): string {
-  switch (s) {
-    case 'COMPLETED': return 'bg-emerald-900 border-emerald-600 text-emerald-300';
-    case 'TIME_EXPIRED': return 'bg-amber-900 border-amber-700 text-amber-300';
-    case 'IN_PROGRESS': return 'bg-cyber-900 border-cyber-500 text-cyber-300 animate-pulse';
-    case 'OPEN': return 'bg-cyber-900 border-cyber-600 text-cyber-300';
-    case 'UPCOMING': return 'bg-arena-800 border-arena-600 text-gray-400';
-    case 'CLOSED': return 'bg-arena-700 border-arena-600 text-gray-500';
-    default: return 'bg-arena-900 border-arena-700 text-gray-600';
-  }
-}
-
-function dayStateIcon(s: DayState): string {
-  switch (s) {
-    case 'COMPLETED': return '✓';
-    case 'TIME_EXPIRED': return '⏰';
-    case 'IN_PROGRESS': return '●';
-    case 'OPEN': return '●';
-    case 'UPCOMING': return '○';
-    case 'CLOSED': return '○';
-    default: return '🔒';
-  }
-}
-
-function dayStateLabel(s: DayState): string {
-  switch (s) {
-    case 'COMPLETED': return 'COMPLETED';
-    case 'TIME_EXPIRED': return 'TIME EXPIRED';
-    case 'IN_PROGRESS': return 'IN PROGRESS';
-    case 'OPEN': return 'AVAILABLE';
-    case 'UPCOMING': return 'LOCKED';
-    case 'CLOSED': return 'CLOSED';
-    default: return 'LOCKED';
-  }
-}
-
-// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { user, clearAuth } = useAuthStore();
 
-  const [game, setGame] = useState<Game | null>(null);
-  const [scheduleGame, setScheduleGame] = useState<Game | null>(null);
-  const [days, setDays] = useState<GameDay[]>([]);
-  const [challenges, setChallenges] = useState<Challenge[]>([]);
-  // Map challengeId → my attempt for that challenge
+  const [gameInfo, setGameInfo] = useState<GameInfo | null>(null);
+  const [days, setDays] = useState<DayData[]>([]);
   const [attemptMap, setAttemptMap] = useState<Record<string, ChallengeAttempt>>({});
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [loading, setLoading] = useState(true);
-  const [serverTimeMs, setServerTimeMs] = useState<number | null>(null);
-  const [, setClockTick] = useState(0);
-  const clockAnchor = useRef<number | null>(null);
+  const groupLink = gameInfo?.groupLink || import.meta.env.VITE_GROUP_LINK || '#';
 
-  // The server response is the anchor; performance.now() keeps the display ticking
-  // without consulting the player's wall clock after the anchor is established.
-  useEffect(() => {
-    const id = setInterval(() => setClockTick(tick => tick + 1), 1_000);
-    return () => clearInterval(id);
-  }, []);
-
-  const nowMs = serverTimeMs === null || clockAnchor.current === null
-    ? null
-    : serverTimeMs + (performance.now() - clockAnchor.current);
-
-  const loadDashboard = useCallback(async () => {
+  const load = useCallback(async () => {
     try {
-      const [gamesRes, scheduleRes] = await Promise.all([gamesApi.getAll(), gamesApi.getSchedule()]);
-      const serverNow = new Date(scheduleRes.data.serverNow).getTime();
-      if (!Number.isNaN(serverNow)) {
-        clockAnchor.current = performance.now();
-        setServerTimeMs(serverNow);
-      }
-      setScheduleGame((scheduleRes.data.game || null) as Game | null);
-      setDays((scheduleRes.data.days || []) as GameDay[]);
-      const games: Game[] = gamesRes.data.games || [];
-      const activeGame = games.find(g => g.status === 'ACTIVE');
-      if (!activeGame) {
-        setGame(null);
-        setChallenges([]);
-        setAttemptMap({});
-        return;
-      }
-      setGame(activeGame);
+      const res = await gamesApi.getAllDays();
+      if (res.data.success) {
+        setGameInfo(res.data.game);
+        setDays(res.data.days || []);
 
-      const daysRes = await gamesApi.getDays(activeGame._id);
-      const gameDays: GameDay[] = (daysRes.data.days || []).sort((a: GameDay, b: GameDay) => a.dayNumber - b.dayNumber);
-      setDays(gameDays.length > 0 ? gameDays : (scheduleRes.data.days || []));
+        // If a game exists, fetch announcements + attempts
+        if (res.data.game) {
+          const annRes = await gamesApi.getAnnouncements(res.data.game._id).catch(() => ({ data: { announcements: [] } }));
+          setAnnouncements((annRes.data.announcements || []).slice(0, 4));
 
-      // Load challenges for all days + attempts for each
-      const challRes = await challengesApi.getAll({ gameId: activeGame._id }).catch(() => ({ data: { challenges: [] } }));
-      const allChallenges: Challenge[] = challRes.data.challenges || [];
-      setChallenges(allChallenges);
-
-      // Fetch my attempt for each active challenge (sequentially to avoid flooding)
-      const newMap: Record<string, ChallengeAttempt> = {};
-      for (const ch of allChallenges.filter(c => c.isActive)) {
-        try {
-          const aRes = await challengesApi.getMyAttempt(ch._id);
-          if (aRes.data.attempt) newMap[ch._id] = aRes.data.attempt as ChallengeAttempt;
-        } catch { /* no attempt for this challenge */ }
+          // Fetch my attempt for each day's challenge
+          const newMap: Record<string, ChallengeAttempt> = {};
+          for (const day of (res.data.days || []) as DayData[]) {
+            if (day.challenge?.isActive) {
+              try {
+                const aRes = await challengesApi.getMyAttempt(day.challenge._id);
+                if (aRes.data.attempt) newMap[day.challenge._id] = aRes.data.attempt as ChallengeAttempt;
+              } catch { /* not enrolled or no attempt */ }
+            }
+          }
+          setAttemptMap(newMap);
+        }
       }
-      setAttemptMap(newMap);
     } catch (err) {
       console.error('Dashboard load error:', err);
     } finally {
       setLoading(false);
     }
-  }, [user?._id]);
+  }, []);
 
-  useEffect(() => { loadDashboard(); }, [loadDashboard]);
+  useEffect(() => { load(); }, [load]);
 
-  // Reconcile displayed attempt states with the backend while this screen is open.
+  // Socket — refresh when admin opens/closes a game
   useEffect(() => {
-    const id = setInterval(loadDashboard, 10_000);
-    return () => clearInterval(id);
-  }, [loadDashboard]);
-
-  // Socket
-  useEffect(() => {
-    if (!game) return;
+    if (!gameInfo) return;
     const socket = getSocket();
     if (!socket) return;
-    joinGameRoom(game._id);
-    socket.on('challenge:opened', () => { toast.success('A challenge is now open!'); loadDashboard(); });
-    socket.on('game:status', loadDashboard);
+    joinGameRoom(gameInfo._id);
+    socket.on('game:day:opened', () => { toast.success('A game has opened!'); load(); });
+    socket.on('game:day:closed', () => { load(); });
+    socket.on('announcement', (ann: Announcement) => {
+      toast(ann.title, { icon: '📢' });
+      setAnnouncements(prev => [ann, ...prev].slice(0, 4));
+    });
     return () => {
-      socket.off('challenge:opened');
-      socket.off('game:status');
+      socket.off('game:day:opened');
+      socket.off('game:day:closed');
+      socket.off('announcement');
     };
-  }, [game, loadDashboard]);
+  }, [gameInfo, load]);
 
-  // ─── Derived state ─────────────────────────────────────────────────────────
+  // ── Helpers ────────────────────────────────────────────────────────────────
 
-  /** Get the best challenge for a given day */
-  const challengeForDay = (dayNumber: number): Challenge | undefined =>
-    challenges.find(c => c.dayNumber === dayNumber && c.isActive);
+  const getAttempt = (challengeId: string) => attemptMap[challengeId];
 
-  /** Get my attempt for a challenge */
-  const attemptForChallenge = (challengeId: string): ChallengeAttempt | undefined =>
-    attemptMap[challengeId];
-
-  /** Compute player-visible state from the stored attempt and schedule. */
-  const computeDayState = (day: GameDay): DayState => {
-    const start = new Date(day.challengeStartTime).getTime();
-    const end = new Date(day.challengeEndTime).getTime();
-    const current = nowMs ?? 0;
-    const ch = challengeForDay(day.dayNumber);
-    if (ch) {
-      const att = attemptForChallenge(ch._id);
-      if (att?.status === 'COMPLETED') return 'COMPLETED';
-      if (att?.status === 'TIME_EXPIRED') return 'TIME_EXPIRED';
-      if (att?.status === 'IN_PROGRESS') {
-        if (current < end && new Date(att.deadlineAt).getTime() > current) return 'IN_PROGRESS';
-        return 'TIME_EXPIRED';
-      }
-    }
-    // Timestamps are the player-facing reflection of the server-enforced window.
-    if (current < start) return 'UPCOMING';
-    if (current >= end || ['CLOSED', 'RESULTS', 'COMPLETED'].includes(day.status)) return 'CLOSED';
-    return ch?.isActive ? 'OPEN' : 'UPCOMING';
+  const isCompleted = (day: DayData) => {
+    if (!day.challenge) return false;
+    const att = getAttempt(day.challenge._id);
+    return att?.status === 'COMPLETED' || att?.status === 'TIME_EXPIRED';
   };
 
-  const todayDay = days.find(day => {
-    if (nowMs === null) return false;
-    return nowMs >= new Date(day.challengeStartTime).getTime()
-      && nowMs < new Date(day.challengeEndTime).getTime();
-  })
-    ?? days.find(day => nowMs !== null && new Date(day.challengeStartTime).getTime() > nowMs)
-    ?? days[days.length - 1];
-  const todayChallenge = todayDay ? challengeForDay(todayDay.dayNumber) : undefined;
-  const todayAttempt = todayChallenge ? attemptForChallenge(todayChallenge._id) : undefined;
-  const todayState = todayDay ? computeDayState(todayDay) : null;
-
-  const displayGame = game || scheduleGame;
-  const groupLink = displayGame?.groupLink || import.meta.env.VITE_GROUP_LINK || '#';
+  const completedCount = days.filter(isCompleted).length;
+  const openDay = days.find(d => d.status === 'OPEN');
 
   if (loading) return (
     <div className="min-h-screen bg-arena-950 flex items-center justify-center">
@@ -235,281 +130,239 @@ export default function DashboardPage() {
   );
 
   return (
-    <main className="survival-shell min-h-screen overflow-hidden text-stone-100">
-      <div className="survival-ambient survival-ambient-one" />
-      <div className="survival-ambient survival-ambient-two" />
-      <nav className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-5 py-5 sm:px-8">
-        <div className="flex items-center gap-3">
-          <span className="survival-mark">S</span>
-          <span className="text-xs font-semibold uppercase tracking-[0.32em] text-stone-300">{import.meta.env.VITE_APP_NAME || 'Survival'}</span>
+    <div className="min-h-screen bg-arena-950">
+      <div className="fixed inset-0 bg-grid-pattern pointer-events-none" />
+
+      {/* Nav */}
+      <nav className="relative z-10 flex items-center justify-between px-4 sm:px-6 py-4 border-b border-arena-700 bg-arena-900/60 backdrop-blur">
+        <div className="flex items-center gap-2">
+          <span className="text-cyber-400">⚔</span>
+          <span className="text-white font-bold tracking-[0.15em] text-sm uppercase">
+            {import.meta.env.VITE_APP_NAME || 'SURVIVAL'}
+          </span>
         </div>
-        <div className="flex items-center gap-4">
-          <a href={groupLink} target="_blank" rel="noopener noreferrer" className="text-xs uppercase tracking-[0.2em] text-stone-400 transition hover:text-rose-200">Group</a>
-          <button onClick={() => { clearAuth(); navigate('/'); }} className="text-xs uppercase tracking-[0.2em] text-stone-500 transition hover:text-stone-100">Exit</button>
+        <div className="flex items-center gap-3">
+          <a href={groupLink} target="_blank" rel="noopener noreferrer"
+            className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1">
+            <span>💬</span><span className="hidden sm:inline">Group</span>
+          </a>
+          <button onClick={() => { clearAuth(); navigate('/'); }}
+            className="text-gray-500 hover:text-gray-300 text-xs tracking-widest uppercase transition-colors">
+            Logout
+          </button>
         </div>
       </nav>
 
-      <div className="relative z-10 mx-auto max-w-6xl px-5 pb-14 sm:px-8">
-        <section className="survival-intro mb-8 flex flex-col justify-between gap-6 border-b border-white/10 pb-8 sm:flex-row sm:items-end">
+      <div className="relative z-10 max-w-2xl mx-auto px-4 sm:px-6 py-6 space-y-5">
+
+        {/* Player identity */}
+        <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.4em] text-rose-300/80">Welcome back</p>
-            <h1 className="font-display text-4xl font-semibold tracking-tight text-stone-50 sm:text-6xl">{user?.nickname || user?.playerTag}</h1>
-            <p className="mt-3 max-w-md text-sm leading-6 text-stone-400">Seven days. One final victory. Your next challenge is waiting.</p>
+            <p className="text-cyber-400 text-xs tracking-[0.3em] uppercase mb-0.5">Welcome back</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-white">{user?.nickname || user?.playerTag}</h1>
+            <p className="text-gray-600 text-sm font-mono">{user?.playerTag}</p>
           </div>
-          <div className="survival-identity"><span>{user?.playerTag || 'PLAYER'}</span><span className="h-1 w-1 rounded-full bg-rose-300" /><span>Season arena</span></div>
-        </section>
-
-        {(game || days.length > 0) && <>
-          <TodayChallengeCard
-            day={todayDay ?? null}
-            challenge={todayChallenge ?? null}
-            attempt={todayAttempt ?? null}
-            state={todayState}
-            groupLink={groupLink}
-            nowMs={nowMs}
-            onEnter={() => todayChallenge && navigate(`/challenge/${todayChallenge._id}`)}
-            onTimerExpire={loadDashboard}
-          />
-
-          <section className="mt-12">
-            <div className="mb-6 flex items-end justify-between gap-4">
-              <div><p className="text-[11px] uppercase tracking-[0.35em] text-rose-300/80">The journey</p><h2 className="font-display mt-2 text-3xl text-stone-100 sm:text-4xl">Your seven-day journey</h2></div>
-              <p className="hidden text-right text-xs uppercase tracking-[0.2em] text-stone-500 sm:block">{displayGame?.name || 'The arena'}<br />Nigeria time</p>
+          {completedCount > 0 && (
+            <div className="text-right shrink-0">
+              <p className="text-xs text-gray-500 uppercase tracking-wider">Challenges Done</p>
+              <p className="text-2xl font-bold text-white">{completedCount}<span className="text-gray-600 text-sm">/7</span></p>
             </div>
-            <div className="survival-journey">
-              {Array.from({ length: 7 }, (_, i) => {
-                const dayNum = i + 1;
-                const day = days.find(d => d.dayNumber === dayNum);
-                return <WeekDayRow key={dayNum} dayNumber={dayNum} shortName={DAY_NAMES_SHORT[i]} longName={DAY_NAMES_LONG[i]} day={day} state={day ? computeDayState(day) : 'LOCKED'} isSunday={dayNum === 7} nowMs={nowMs} isCurrentDay={Boolean(todayDay && day && todayDay._id === day._id)} />;
-              })}
-            </div>
-          </section>
-
-          <div className="mt-12 flex flex-col items-start justify-between gap-5 border-t border-white/10 pt-6 sm:flex-row sm:items-center">
-            <div><p className="font-display text-xl text-stone-200">Official results live in the group.</p><p className="mt-1 text-sm text-stone-500">Keep your eyes on the arena.</p></div>
-            <a href={groupLink} target="_blank" rel="noopener noreferrer" className="survival-link">Enter the group <span>↗</span></a>
-          </div>
-        </>}
-      </div>
-    </main>
-  );
-}
-
-// ─── Sub-components ────────────────────────────────────────────────────────────
-
-interface TodayCardProps {
-  day: GameDay | null;
-  challenge: Challenge | null;
-  attempt: ChallengeAttempt | null;
-  state: DayState | null;
-  groupLink: string;
-  nowMs: number | null;
-  onEnter: () => void;
-  onTimerExpire: () => void;
-}
-
-function TodayChallengeCard({ day, challenge, attempt, state, groupLink, nowMs, onEnter, onTimerExpire }: TodayCardProps) {
-  if (!day && !challenge) {
-    return (
-      <div className="arena-card border border-arena-600 p-6 text-center space-y-2">
-        <p className="text-gray-500 text-xs uppercase tracking-widest">Today's Challenge</p>
-        <p className="text-2xl font-bold text-gray-400">No game scheduled today</p>
-        <p className="text-gray-600 text-sm">Watch the group for the next game announcement.</p>
-      </div>
-    );
-  }
-
-  const dayIndex = (day?.dayNumber ?? 1) - 1;
-  const longName = DAY_NAMES_LONG[dayIndex] ?? 'Today';
-  const startTime = day ? fmtTime(day.challengeStartTime) : '—';
-  const endTime = day ? fmtTime(day.challengeEndTime) : '—';
-
-  const borderClass =
-    state === 'COMPLETED' ? 'border-emerald-200/25' :
-      state === 'TIME_EXPIRED' ? 'border-amber-200/25' :
-        state === 'IN_PROGRESS' ? 'border-rose-200/40' :
-          state === 'OPEN' ? 'border-rose-200/35' :
-            'border-white/10';
-
-  return (
-    <div className={`survival-hero relative overflow-hidden rounded-[2rem] border p-6 sm:p-10 ${borderClass} space-y-7`}>
-      <div className="survival-hero-art" aria-hidden="true"><span /><span /><span /></div>
-      {/* Header */}
-      <div className="relative z-10 flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.35em] text-rose-200/80">Today's challenge</p>
-          <h2 className="font-display mt-3 text-5xl tracking-wide text-stone-50 sm:text-7xl">{longName}</h2>
-        </div>
-        <p className="survival-status">{state === 'COMPLETED' ? 'Completed' : state === 'TIME_EXPIRED' ? 'Time is up' : state === 'IN_PROGRESS' ? 'Live now' : state === 'OPEN' ? 'Available' : state === 'CLOSED' ? 'Closed' : 'Locked'}</p>
-      </div>
-
-      {day && <div className="relative z-10 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs uppercase tracking-[0.18em] text-stone-400"><span>{startTime} – {endTime}</span><span className="text-rose-200/60">Africa / Lagos</span></div>}
-
-      {/* ── State-specific content ── */}
-
-      {/* LOCKED / UPCOMING — not yet open */}
-      {(state === 'LOCKED' || state === 'UPCOMING') && day && (
-        <div className="relative z-10 space-y-4 rounded-2xl border border-white/10 bg-black/25 px-5 py-6 text-center sm:px-8">
-          <p className="text-sm uppercase tracking-[0.25em] text-stone-300">The vault is sealed</p>
-          {nowMs !== null && (
-            <>
-              <p className="text-[10px] uppercase tracking-[0.35em] text-rose-200/70">Opens in</p>
-              <p className="survival-countdown">
-                {formatCountdown(day.challengeStartTime, nowMs)}
-              </p>
-            </>
           )}
         </div>
-      )}
 
-      {/* OPEN — player hasn't started yet */}
-      {state === 'OPEN' && challenge && !attempt && (
-        <div className="space-y-3">
-          <div className="rounded-2xl border border-rose-300/30 bg-rose-950/30 px-5 py-4">
-            <p className="text-sm font-semibold text-rose-100">The vault is open.</p>
-            <p className="mt-1 text-xs text-stone-400">Your personal timer begins when you enter. The arena closes at {endTime}.</p>
-          </div>
-          <button onClick={onEnter} className="survival-cta w-full py-4 text-base">
-            Start challenge <span>→</span>
-          </button>
-        </div>
-      )}
+        {/* Active challenge card — shown prominently when a game is open */}
+        {openDay?.challenge && (() => {
+          const ch = openDay.challenge!;
+          const attempt = getAttempt(ch._id);
+          const done = isCompleted(openDay);
+          const theme = DAY_THEMES[openDay.dayNumber - 1];
 
-      {/* IN_PROGRESS — player has active attempt */}
-      {state === 'IN_PROGRESS' && attempt && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between gap-4 rounded-2xl border border-amber-200/20 bg-amber-950/20 px-5 py-4">
-            <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-amber-100/70">Your personal timer</p>
-              <CountdownTimer
-                deadlineAt={attempt.deadlineAt}
-                onExpire={onTimerExpire}
-                className="text-left"
-              />
+          return (
+            <div className="arena-card cyber-border-active p-5 space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-cyber-400 text-xs tracking-[0.3em] uppercase mb-1">🟢 NOW OPEN</p>
+                  <h2 className="text-xl font-bold text-white">
+                    {theme?.icon} Day {openDay.dayNumber} — {theme?.name ?? ch.title}
+                  </h2>
+                  <p className="text-gray-400 text-sm mt-0.5">{ch.description || theme?.desc}</p>
+                </div>
+                <span className={`text-xs font-bold px-2 py-1 rounded shrink-0 ${ch.difficulty === 'HARD' ? 'bg-orange-900 text-orange-400' :
+                    ch.difficulty === 'EXTREME' ? 'bg-danger-900 text-danger-400' :
+                      'bg-amber-900 text-amber-400'}`}>
+                  {ch.difficulty}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="bg-arena-900 rounded px-3 py-2">
+                  <p className="text-gray-500">Personal Timer</p>
+                  <p className="text-white font-mono font-bold">{Math.round(ch.durationSeconds / 60)} min</p>
+                </div>
+                <div className="bg-arena-900 rounded px-3 py-2">
+                  <p className="text-gray-500">Stages</p>
+                  <p className="text-white font-mono font-bold">{ch.totalStages}</p>
+                </div>
+              </div>
+
+              {/* Attempt-based UI */}
+              {done ? (
+                <div className="space-y-3">
+                  <div className={`rounded-lg px-4 py-3 text-center ${attempt?.status === 'COMPLETED' ? 'bg-emerald-900/20 border border-emerald-800' : 'bg-arena-900 border border-arena-700'}`}>
+                    <p className={`text-sm font-bold ${attempt?.status === 'COMPLETED' ? 'text-emerald-400' : 'text-gray-300'}`}>
+                      {attempt?.status === 'COMPLETED' ? '✓ SUBMISSION RECEIVED' : '⏱ TIME EXPIRED'}
+                    </p>
+                    <p className="text-gray-500 text-xs mt-1">Please return to the group for your official result.</p>
+                  </div>
+                  <a href={groupLink} target="_blank" rel="noopener noreferrer"
+                    className="btn-primary w-full py-3 flex items-center justify-center gap-2 text-sm">
+                    <span>💬</span> GO TO THE GROUP
+                  </a>
+                </div>
+              ) : attempt?.status === 'IN_PROGRESS' ? (
+                <div className="space-y-3">
+                  <div className="bg-amber-900/20 border border-amber-800 rounded-lg px-4 py-3 flex items-center justify-between">
+                    <div>
+                      <p className="text-amber-400 text-xs font-bold uppercase tracking-wider mb-1">Personal Timer</p>
+                      <CountdownTimer deadlineAt={attempt.deadlineAt} onExpire={load} />
+                    </div>
+                    <p className="text-gray-600 text-xs text-right">Server-controlled<br />Refresh-safe</p>
+                  </div>
+                  <button onClick={() => navigate(`/challenge/${ch._id}`)}
+                    className="btn-primary w-full py-4 text-base">
+                    ⚡ RESUME CHALLENGE
+                  </button>
+                </div>
+              ) : (
+                <button onClick={() => navigate(`/challenge/${ch._id}`)}
+                  className="btn-primary w-full py-4 text-base tracking-wide">
+                  ⚡ START CHALLENGE
+                </button>
+              )}
             </div>
-            <div className="text-right text-xs text-gray-500">
-              <p>Global close</p>
-              <p className="font-mono text-white">{endTime}</p>
-            </div>
+          );
+        })()}
+
+        {/* 7-day journey */}
+        <div className="arena-card p-5 space-y-3">
+          <p className="section-title">YOUR SEVEN DAY JOURNEY</p>
+
+          {Array.from({ length: 7 }, (_, i) => {
+            const dayNum = i + 1;
+            const day = days.find(d => d.dayNumber === dayNum);
+            const theme = DAY_THEMES[i];
+            const ch = day?.challenge;
+            const att = ch ? getAttempt(ch._id) : undefined;
+            const done = day ? isCompleted(day) : false;
+            const isOpen = day?.status === 'OPEN';
+            const isDay7 = dayNum === 7;
+
+            return (
+              <div
+                key={dayNum}
+                className={`rounded-xl border transition-all overflow-hidden
+                  ${done ? 'border-emerald-800 bg-emerald-900/10' :
+                    isOpen ? 'border-cyber-700 bg-cyber-900/10' :
+                      isDay7 ? 'border-gold-800/40 bg-arena-900/50' :
+                        'border-arena-700 bg-arena-900/30'}`}
+              >
+                <div className="flex items-center gap-3 px-4 py-3">
+                  {/* Day number */}
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 border
+                    ${done ? 'bg-emerald-900 border-emerald-600 text-emerald-300' :
+                      isOpen ? 'bg-cyber-900 border-cyber-600 text-cyber-300' :
+                        isDay7 ? 'bg-gold-700 border-gold-500 text-arena-950' :
+                          'bg-arena-700 border-arena-600 text-gray-400'}`}>
+                    {done ? '✓' : dayNum}
+                  </div>
+
+                  {/* Name + desc */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">{theme.icon}</span>
+                      <span className={`text-sm font-semibold truncate
+                        ${done ? 'text-emerald-300' : isOpen ? 'text-cyber-200' : isDay7 ? 'text-gold-300' : 'text-gray-400'}`}>
+                        Day {dayNum} — {theme.name}
+                        {isDay7 && <span className="text-[10px] text-gold-500 ml-1.5 uppercase tracking-wider">Final</span>}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-gray-600 mt-0.5 truncate">{theme.desc}</p>
+                  </div>
+
+                  {/* Status badge */}
+                  <div className="shrink-0">
+                    {done ? (
+                      <span className="text-xs font-bold text-emerald-400">✓ DONE</span>
+                    ) : isOpen ? (
+                      att?.status === 'IN_PROGRESS' ? (
+                        <span className="text-xs font-bold text-amber-400 animate-pulse">● LIVE</span>
+                      ) : (
+                        <button onClick={() => ch && navigate(`/challenge/${ch._id}`)}
+                          className="text-xs font-bold bg-cyber-800 text-cyber-300 border border-cyber-600 px-2.5 py-1 rounded-lg hover:bg-cyber-700 transition-colors">
+                          PLAY →
+                        </button>
+                      )
+                    ) : (
+                      <span className="text-lg">🔒</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Blurred locked overlay for non-open games */}
+                {!isOpen && !done && (
+                  <div className="px-4 pb-3">
+                    <div className="rounded-lg bg-arena-800/60 h-8 flex items-center justify-center"
+                      style={{ filter: 'blur(3px)', pointerEvents: 'none', userSelect: 'none' }}>
+                      <div className="flex gap-2">
+                        {Array.from({ length: 6 }, (_, j) => (
+                          <div key={j} className="w-5 h-5 bg-arena-600 rounded" />
+                        ))}
+                      </div>
+                    </div>
+                    <p className="text-center text-gray-600 text-[10px] mt-1.5 uppercase tracking-wider">
+                      🔒 Waiting for admin to open this game
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Announcements */}
+        {announcements.length > 0 && (
+          <div className="arena-card p-5 space-y-3">
+            <p className="section-title">Announcements</p>
+            {announcements.map(ann => (
+              <div key={ann._id} className="flex gap-3 py-2 border-b border-arena-700 last:border-0">
+                <span className="text-base shrink-0">
+                  {ann.type === 'CHALLENGE_OPEN' ? '⚡' : ann.type === 'WARNING' ? '⚠️' : '📢'}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-white text-sm font-semibold">{ann.title}</p>
+                  <p className="text-gray-400 text-xs mt-0.5 leading-relaxed line-clamp-2">{ann.message}</p>
+                  {ann.publishedAt && (
+                    <p className="text-gray-600 text-xs mt-1">
+                      {formatDistanceToNow(new Date(ann.publishedAt), { addSuffix: true })}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
-          <div className="flex gap-3">
-            <button onClick={onEnter} className="survival-cta flex-1 py-3 text-sm">
-              Continue challenge <span>→</span>
-            </button>
-          </div>
-          <p className="text-gray-600 text-xs text-center">
-            Refreshing will NOT reset your timer — it continues on the server.
-          </p>
-        </div>
-      )}
-
-      {/* Locked attempt: submitted or expired */}
-      {(state === 'COMPLETED' || state === 'TIME_EXPIRED') && (
-        <div className="space-y-3">
-          <div className={`rounded-2xl px-5 py-5 text-center space-y-2 ${state === 'COMPLETED'
-            ? 'bg-emerald-950/20 border border-emerald-200/20'
-            : 'bg-black/20 border border-white/10'
-            }`}>
-            <p className={`font-display text-2xl tracking-wide ${state === 'COMPLETED' ? 'text-emerald-200' : 'text-amber-100'}`}>
-              {state === 'COMPLETED' ? 'Submission received' : 'Time is up'}
-            </p>
-            <p className="text-gray-400 text-sm">
-              Thank you for participating. Your challenge has been locked.
-            </p>
-            <p className="text-gray-500 text-xs">
-              Please return to the group for your official result.
-            </p>
-          </div>
-          <a href={groupLink} target="_blank" rel="noopener noreferrer" className="survival-link w-full justify-center">
-            Official results <span>↗</span>
-          </a>
-        </div>
-      )}
-
-      {/* CLOSED — global window ended, player never started */}
-      {state === 'CLOSED' && (
-        <div className="space-y-3">
-          <div className="rounded-2xl border border-white/10 bg-black/20 px-5 py-5 text-center">
-            <p className="font-display text-2xl tracking-wide text-stone-200">The vault is sealed.</p>
-            <p className="mt-1 text-xs text-stone-500">The next scheduled challenge will appear in the journey.</p>
-          </div>
-          <a href={groupLink} target="_blank" rel="noopener noreferrer" className="survival-link w-full justify-center">
-            Return to the group <span>↗</span>
-          </a>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Week-row component ────────────────────────────────────────────────────────
-
-interface WeekDayRowProps {
-  dayNumber: number;
-  shortName: string;
-  longName: string;
-  day: GameDay | undefined;
-  state: DayState;
-  isSunday: boolean;
-  nowMs: number | null;
-  isCurrentDay: boolean;
-}
-
-function WeekDayRow({ dayNumber, shortName, longName, day, state, isSunday, nowMs, isCurrentDay }: WeekDayRowProps) {
-  const isExpired = state === 'TIME_EXPIRED';
-  const isLive = state === 'IN_PROGRESS' || state === 'OPEN';
-
-  return (
-    <div className={`survival-stage relative flex min-h-[152px] flex-col items-start justify-between gap-4 px-4 py-5 transition-all
-      ${isCurrentDay ? 'survival-stage-current' : ''}
-      ${state === 'COMPLETED' ? 'survival-stage-complete' : isExpired ? 'survival-stage-expired' : isLive ? 'survival-stage-live' : ''}`}>
-
-      <div className="flex w-full items-start justify-between gap-2">
-        {/* Day number badge */}
-        <div className={`survival-stage-number ${isSunday ? 'survival-stage-final' : ''}`}>
-          {dayNumber}
-        </div>
-
-        {isCurrentDay && <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-rose-200">Today</span>}
-      </div>
-
-      {/* Day name + times */}
-      <div className="w-full min-w-0">
-        <div className="flex items-baseline gap-2">
-          <span className="font-display text-2xl tracking-wide text-stone-100">
-            {shortName}
-          </span>
-        </div>
-        {day ? (
-          <>
-            <p className="text-[10px] uppercase tracking-[0.16em] text-stone-500 mt-1">
-              {fmtTime(day.challengeStartTime)} – {fmtTime(day.challengeEndTime)}
-            </p>
-            {isCurrentDay && state === 'UPCOMING' && nowMs !== null && (
-              <p className="text-[10px] text-rose-200/80 font-mono uppercase tracking-wider mt-2">
-                {formatCountdown(day.challengeStartTime, nowMs)}
-              </p>
-            )}
-          </>
-        ) : (
-          <p className="text-[11px] text-stone-600 mt-0.5">Schedule pending</p>
         )}
-      </div>
 
-      {(state === 'LOCKED' || state === 'UPCOMING') && (
-        <div className="w-full space-y-2" aria-label="Game hidden until it opens">
-          <p className="text-[9px] uppercase tracking-[0.2em] text-stone-600">Locked</p>
-          <div className="survival-blur-preview" aria-hidden="true">
-            <span /><span /><span />
+        {/* Group footer */}
+        <div className="arena-card p-4 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-white text-sm font-semibold">Official Results Channel</p>
+            <p className="text-gray-500 text-xs mt-0.5">All results are announced in the group by the admin.</p>
           </div>
+          <a href={groupLink} target="_blank" rel="noopener noreferrer"
+            className="btn-primary text-xs px-4 py-2 flex items-center gap-1.5 shrink-0">
+            <span>💬</span> GROUP
+          </a>
         </div>
-      )}
-
-      {/* Status indicator */}
-      <div className="flex items-center gap-1.5 shrink-0">
-        <span className={`text-[10px] font-semibold uppercase tracking-[0.2em] ${isLive ? 'text-rose-200' : state === 'COMPLETED' ? 'text-emerald-200' : 'text-stone-500'}`}>
-          {state === 'COMPLETED' ? 'Complete' : isExpired ? 'Closed' : isLive ? 'Open' : 'Locked'}
-        </span>
       </div>
     </div>
   );

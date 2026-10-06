@@ -93,6 +93,18 @@ export const gamesApi = {
     axiosInstance.post(`/games/${gameId}/announcements`, data),
   publishAnnouncement: (gameId: string, annId: string) =>
     axiosInstance.patch(`/games/${gameId}/announcements/${annId}/publish`, {}),
+
+  // Admin game-day open/close controls
+  openDay: (gameId: string, dayId: string, forceCloseOthers = false) =>
+    axiosInstance.post(`/games/${gameId}/days/${dayId}/open`, { forceCloseOthers }),
+  closeDay: (gameId: string, dayId: string, endActiveAttempts = false) =>
+    axiosInstance.post(`/games/${gameId}/days/${dayId}/close`, { endActiveAttempts }),
+  getDayLiveStats: (gameId: string, dayId: string) =>
+    axiosInstance.get(`/games/${gameId}/days/${dayId}/live-stats`),
+
+  // Player dashboard endpoints
+  getAllDays: () => axiosInstance.get('/games/all-days'),
+  getActiveDay: () => axiosInstance.get('/games/active-day'),
 };
 
 // ─── Challenges ───────────────────────────────────────────────────────────────

@@ -294,8 +294,7 @@ router.post('/:id/start', authenticate, challengeLimiter, async (req: AuthReques
     const inProgress = existingAttempts.find(a => a.status === 'IN_PROGRESS');
     if (inProgress) {
       const now = new Date();
-      const reconnectDay = await GameDay.findById(inProgress.gameDayId);
-      if (now >= inProgress.deadlineAt || (reconnectDay && now >= reconnectDay.challengeEndTime)) {
+      if (now >= inProgress.deadlineAt) {
         inProgress.status = 'TIME_EXPIRED';
         await inProgress.save();
         res.status(403).json({
@@ -330,47 +329,35 @@ router.post('/:id/start', authenticate, challengeLimiter, async (req: AuthReques
       return;
     }
 
-    // Verify game day window — GLOBAL window enforced, late players get remaining time
+    // Verify game day — ADMIN OPEN/CLOSE is authoritative (no time-based check)
     const gameDay = await GameDay.findById(challenge.gameDayId);
     if (!gameDay) {
-      res.status(403).json({ success: false, message: 'Challenge day is not open' }); return;
+      res.status(403).json({ success: false, message: 'Game day not found' }); return;
     }
 
+    // Admin OPEN check — only status matters, not time
+    if (gameDay.status !== 'OPEN') {
+      res.status(403).json({
+        success: false,
+        message: 'This game is not currently open. Wait for the admin to open it.',
+        dayStatus: gameDay.status,
+      });
+      return;
+    }
+
+    // Challenge must also be open (admin toggle)
+    if (!challenge.isOpen) {
+      res.status(403).json({
+        success: false,
+        message: 'This challenge is not open yet.',
+      });
+      return;
+    }
+
+    // Personal challenge deadline = now + durationSeconds
+    // (No global close time constraint — admin closes the day to stop new starts)
     const now = new Date();
-
-    if (['CLOSED', 'RESULTS', 'COMPLETED'].includes(gameDay.status)) {
-      res.status(403).json({ success: false, message: 'Challenge day is closed' }); return;
-    }
-
-    // Global open check — server time only, never trusts client
-    if (now < gameDay.challengeStartTime) {
-      const secondsUntilOpen = Math.ceil(
-        (gameDay.challengeStartTime.getTime() - now.getTime()) / 1000
-      );
-      res.status(403).json({
-        success: false,
-        message: 'Challenge has not started yet',
-        opensAt: gameDay.challengeStartTime,
-        secondsUntilOpen,
-      });
-      return;
-    }
-
-    // Global close check — challenge window is over
-    if (now >= gameDay.challengeEndTime) {
-      res.status(403).json({
-        success: false,
-        message: 'THIS CHALLENGE IS CLOSED. Please return to the group for the official result.',
-        closedAt: gameDay.challengeEndTime,
-      });
-      return;
-    }
-
-    // IMPORTANT: deadline is min(player's full duration, global close time)
-    // Late players get only remaining window time — never a fresh full timer
-    const fullDeadline = new Date(now.getTime() + challenge.durationSeconds * 1000);
-    const globalClose = gameDay.challengeEndTime;
-    const deadlineAt = fullDeadline < globalClose ? fullDeadline : globalClose;
+    const deadlineAt = new Date(now.getTime() + challenge.durationSeconds * 1000);
 
     // Generate player-specific puzzle instance
     const attemptNumber = existingAttempts.length + 1;
@@ -474,19 +461,6 @@ router.post('/:id/submit-stage', authenticate, challengeLimiter, async (req: Aut
       attempt.status = 'TIME_EXPIRED';
       await attempt.save();
       res.status(400).json({ success: false, message: 'Time expired', status: 'TIME_EXPIRED' }); return;
-    }
-
-    // Also enforce global game window close
-    const gameDay2 = await GameDay.findById(attempt.gameDayId);
-    if (gameDay2 && now >= gameDay2.challengeEndTime) {
-      attempt.status = 'TIME_EXPIRED';
-      await attempt.save();
-      res.status(400).json({
-        success: false,
-        message: 'THIS CHALLENGE IS CLOSED. Please return to the group for the official result.',
-        status: 'TIME_EXPIRED',
-      });
-      return;
     }
 
     // Stage order enforcement — cannot skip stages
@@ -622,12 +596,6 @@ router.post('/:id/submit', authenticate, challengeLimiter, async (req: AuthReque
       await attempt.save();
       res.status(400).json({ success: false, message: 'Time expired', status: 'TIME_EXPIRED' }); return;
     }
-    const gameDay = await GameDay.findById(attempt.gameDayId);
-    if (gameDay && now >= gameDay.challengeEndTime) {
-      attempt.status = 'TIME_EXPIRED';
-      await attempt.save();
-      res.status(400).json({ success: false, message: 'THIS CHALLENGE IS CLOSED.', status: 'TIME_EXPIRED' }); return;
-    }
     if (now >= attempt.deadlineAt) {
       attempt.status = 'TIME_EXPIRED';
       await attempt.save();
@@ -699,11 +667,7 @@ router.get('/:id/my-attempt', authenticate, async (req: AuthRequest, res: Respon
     if (!attempt) { res.json({ success: true, attempt: null }); return; }
 
     const now = new Date();
-    const gameDay = await GameDay.findById(attempt.gameDayId).select('challengeEndTime');
-    if (
-      attempt.status === 'IN_PROGRESS' &&
-      (now >= attempt.deadlineAt || (gameDay && now >= gameDay.challengeEndTime))
-    ) {
+    if (attempt.status === 'IN_PROGRESS' && now >= attempt.deadlineAt) {
       attempt.status = 'TIME_EXPIRED';
       await attempt.save();
     }
