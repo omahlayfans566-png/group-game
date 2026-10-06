@@ -7,6 +7,7 @@ import ChallengeAttempt from '../models/ChallengeAttempt';
 import Submission from '../models/Submission';
 import PlayerGame from '../models/PlayerGame';
 import GameDay from '../models/GameDay';
+import Game from '../models/Game';
 import { generatePuzzle } from '../services/puzzleEngine';
 import { validatePuzzle } from '../services/puzzleValidator';
 import { buildSeed } from '../services/seededRandom';
@@ -273,7 +274,18 @@ router.post('/:id/start', authenticate, challengeLimiter, async (req: AuthReques
       res.status(404).json({ success: false, message: 'Challenge not found or not active' }); return;
     }
     // Must be enrolled in this game and not eliminated
-    const pg = await PlayerGame.findOne({ userId, gameId: challenge.gameId });
+    let pg = await PlayerGame.findOne({ userId, gameId: challenge.gameId });
+    if (!pg) {
+      const game = await Game.findById(challenge.gameId);
+      if (game && ['ACTIVE', 'DRAFT', 'PAUSED'].includes(game.status)) {
+        pg = await PlayerGame.findOneAndUpdate(
+          { userId, gameId: challenge.gameId },
+          { $setOnInsert: { userId, gameId: challenge.gameId, status: 'ACTIVE' } },
+          { upsert: true, new: true }
+        );
+        await Game.findByIdAndUpdate(challenge.gameId, { $inc: { totalPlayers: 1 } });
+      }
+    }
     if (!pg) { res.status(403).json({ success: false, message: 'Not enrolled in this game' }); return; }
     if (pg.status === 'ELIMINATED') {
       res.status(403).json({ success: false, message: 'Eliminated players cannot participate' }); return;

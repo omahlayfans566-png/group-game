@@ -18,6 +18,7 @@ import Game from '../models/Game';
 import GameDay from '../models/GameDay';
 import Challenge from '../models/Challenge';
 import User from '../models/User';
+import { autoEnrollAllActivePlayersInGame } from './enrollmentService';
 
 const DAY_CONFIGS: Array<{
   dayNumber: number;
@@ -181,8 +182,8 @@ export async function seedGameIfNeeded(): Promise<void> {
       await challenge.save();
     }
 
-    // Update totalPlayers on game (0 to start)
-    await Game.findByIdAndUpdate(game._id, { currentDay: 0 });
+    // Auto-enroll any existing active players in the newly seeded game
+    await autoEnrollAllActivePlayersInGame(game._id);
 
     console.log(`✅ Game seeded: "${game.name}" with 7 days and 7 challenges`);
     console.log('   All games are CLOSED. Admin must open them from the admin panel.');

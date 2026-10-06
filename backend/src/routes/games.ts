@@ -10,6 +10,7 @@ import Challenge from '../models/Challenge';
 import ChallengeAttempt from '../models/ChallengeAttempt';
 import Submission from '../models/Submission';
 import Elimination from '../models/Elimination';
+import { autoEnrollPlayerInActiveGames, autoEnrollAllActivePlayersInGame } from '../services/enrollmentService';
 
 const router = Router();
 
@@ -86,8 +87,11 @@ router.get('/server-time', authenticate, (_req: AuthRequest, res: Response): voi
 // GET /api/games/schedule (player-safe schedule and server clock)
 // This remains available when there is no ACTIVE game so the player can still
 // see the seven-day arena. It never includes challenges or puzzle data.
-router.get('/schedule', authenticate, async (_req: AuthRequest, res: Response): Promise<void> => {
+router.get('/schedule', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    if (req.user?.role === 'player') {
+      await autoEnrollPlayerInActiveGames(req.user._id);
+    }
     const game = await Game.findOne({ status: { $in: ['ACTIVE', 'PAUSED', 'DRAFT'] } })
       .select('_id name status startDate currentDay groupLink')
       .sort({ status: 1, createdAt: -1 });
@@ -229,6 +233,7 @@ router.post('/', authenticate, requireAdmin, async (req: AuthRequest, res: Respo
     });
 
     await game.save();
+    await autoEnrollAllActivePlayersInGame(game._id);
     res.status(201).json({ success: true, game });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Server error' });
@@ -238,6 +243,9 @@ router.post('/', authenticate, requireAdmin, async (req: AuthRequest, res: Respo
 // GET /api/games/active-day  (player + admin) — returns the currently open day+challenge
 router.get('/active-day', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    if (req.user?.role === 'player') {
+      await autoEnrollPlayerInActiveGames(req.user._id);
+    }
     const game = await Game.findOne({ status: 'ACTIVE' });
     if (!game) { res.json({ success: true, activeDay: null }); return; }
     const openDay = await GameDay.findOne({ gameId: game._id, status: 'OPEN' });
@@ -250,6 +258,9 @@ router.get('/active-day', authenticate, async (req: AuthRequest, res: Response):
 // GET /api/games/all-days  (player) — all 7 days with status + challenge meta
 router.get('/all-days', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    if (req.user?.role === 'player') {
+      await autoEnrollPlayerInActiveGames(req.user._id);
+    }
     const game = await Game.findOne({ status: 'ACTIVE' });
     if (!game) { res.json({ success: true, game: null, days: [] }); return; }
     const days = await GameDay.find({ gameId: game._id }).sort({ dayNumber: 1 });

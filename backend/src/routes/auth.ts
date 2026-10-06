@@ -4,6 +4,7 @@ import { z } from 'zod';
 import User from '../models/User';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { authLimiter } from '../middleware/rateLimiter';
+import { autoEnrollPlayerInActiveGames } from '../services/enrollmentService';
 
 const router = Router();
 
@@ -91,6 +92,9 @@ router.post('/register', authLimiter, async (req: Request, res: Response): Promi
 
     await user.save();
 
+    // Automatically enroll new player in currently active/open games
+    await autoEnrollPlayerInActiveGames(user._id);
+
     const token = generateToken(String(user._id), user.role);
 
     res.status(201).json({
@@ -152,6 +156,9 @@ router.post('/setup-profile', authenticate, async (req: AuthRequest, res: Respon
     user.isSetupComplete = true;
     await user.save();
 
+    // Ensure player is enrolled in active games
+    await autoEnrollPlayerInActiveGames(user._id);
+
     res.json({
       success: true,
       user: safeUser(user),
@@ -193,6 +200,10 @@ router.post('/login', authLimiter, async (req: Request, res: Response): Promise<
     }
 
     const token = generateToken(String(user._id), user.role);
+
+    if (user.role === 'player') {
+      await autoEnrollPlayerInActiveGames(user._id);
+    }
 
     res.json({
       success: true,

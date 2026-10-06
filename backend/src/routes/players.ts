@@ -9,6 +9,7 @@ import Submission from '../models/Submission';
 import Elimination from '../models/Elimination';
 import Game from '../models/Game';
 import GameDay from '../models/GameDay';
+import { autoEnrollPlayerInActiveGames } from '../services/enrollmentService';
 
 const router = Router();
 
@@ -57,6 +58,7 @@ router.post('/', authenticate, requireAdmin, async (req: AuthRequest, res: Respo
       isSetupComplete: nickname.length > 0,
     });
     await user.save();
+    await autoEnrollPlayerInActiveGames(user._id);
 
     res.status(201).json({ success: true, player: user });
   } catch {
