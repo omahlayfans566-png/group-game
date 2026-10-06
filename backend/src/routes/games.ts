@@ -235,6 +235,42 @@ router.post('/', authenticate, requireAdmin, async (req: AuthRequest, res: Respo
   }
 });
 
+// GET /api/games/active-day  (player + admin) — returns the currently open day+challenge
+router.get('/active-day', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const game = await Game.findOne({ status: 'ACTIVE' });
+    if (!game) { res.json({ success: true, activeDay: null }); return; }
+    const openDay = await GameDay.findOne({ gameId: game._id, status: 'OPEN' });
+    if (!openDay) { res.json({ success: true, game: { _id: game._id, name: game.name }, activeDay: null }); return; }
+    const challenges = await Challenge.find({ gameDayId: openDay._id, isActive: true }).select('-puzzleConfig');
+    res.json({ success: true, game: { _id: game._id, name: game.name, groupLink: game.groupLink }, activeDay: openDay, challenges });
+  } catch { res.status(500).json({ success: false, message: 'Server error' }); }
+});
+
+// GET /api/games/all-days  (player) — all 7 days with status + challenge meta
+router.get('/all-days', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const game = await Game.findOne({ status: 'ACTIVE' });
+    if (!game) { res.json({ success: true, game: null, days: [] }); return; }
+    const days = await GameDay.find({ gameId: game._id }).sort({ dayNumber: 1 });
+    const challenges = await Challenge.find({ gameId: game._id, isActive: true }).select('-puzzleConfig').sort({ dayNumber: 1 });
+    const dayData = days.map(d => {
+      const ch = challenges.find(c => c.gameDayId.toString() === d._id.toString());
+      return {
+        _id: d._id, dayNumber: d.dayNumber, dayOfWeek: d.dayOfWeek, status: d.status,
+        challenge: ch ? {
+          _id: ch._id, title: ch.title, description: ch.description,
+          difficulty: ch.difficulty, challengeType: ch.challengeType,
+          durationSeconds: ch.durationSeconds, maxAttempts: ch.maxAttempts,
+          totalStages: ch.totalStages, maxScore: ch.maxScore,
+          isOpen: ch.isOpen, isActive: ch.isActive,
+        } : null,
+      };
+    });
+    res.json({ success: true, game: { _id: game._id, name: game.name, groupLink: game.groupLink }, days: dayData });
+  } catch { res.status(500).json({ success: false, message: 'Server error' }); }
+});
+
 // GET /api/games/:gameId
 router.get('/:gameId', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -610,76 +646,6 @@ router.get('/:gameId/days/:dayId/live-stats', authenticate, requireAdmin, async 
     const pending = Math.max(0, totalPlayers - started);
 
     res.json({ success: true, stats: { totalPlayers, started, submitted, active, expired, pending } });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Server error' });
-  }
-});
-
-// GET /api/games/active-day  (player + admin) — returns the currently open day+challenge
-router.get('/active-day', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const game = await Game.findOne({ status: 'ACTIVE' });
-    if (!game) { res.json({ success: true, activeDay: null }); return; }
-
-    const openDay = await GameDay.findOne({ gameId: game._id, status: 'OPEN' });
-    if (!openDay) { res.json({ success: true, game: { _id: game._id, name: game.name }, activeDay: null }); return; }
-
-    const challenges = await Challenge.find({ gameDayId: openDay._id, isActive: true })
-      .select('-puzzleConfig');
-
-    res.json({
-      success: true,
-      game: { _id: game._id, name: game.name, groupLink: game.groupLink },
-      activeDay: openDay,
-      challenges,
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Server error' });
-  }
-});
-
-// GET /api/games/all-days  (player) — returns all 7 days with their status + challenge meta
-router.get('/all-days', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const game = await Game.findOne({ status: 'ACTIVE' });
-    if (!game) { res.json({ success: true, game: null, days: [] }); return; }
-
-    const days = await GameDay.find({ gameId: game._id }).sort({ dayNumber: 1 });
-
-    // Get challenges — strip puzzle config for players
-    const challenges = await Challenge.find({ gameId: game._id, isActive: true })
-      .select('-puzzleConfig')
-      .sort({ dayNumber: 1 });
-
-    // Build day map with challenge info
-    const dayData = days.map(d => {
-      const ch = challenges.find(c => c.gameDayId.toString() === d._id.toString());
-      return {
-        _id: d._id,
-        dayNumber: d.dayNumber,
-        dayOfWeek: d.dayOfWeek,
-        status: d.status,     // OPEN | CLOSED | UPCOMING | COMPLETED
-        challenge: ch ? {
-          _id: ch._id,
-          title: ch.title,
-          description: ch.description,
-          difficulty: ch.difficulty,
-          challengeType: ch.challengeType,
-          durationSeconds: ch.durationSeconds,
-          maxAttempts: ch.maxAttempts,
-          totalStages: ch.totalStages,
-          maxScore: ch.maxScore,
-          isOpen: ch.isOpen,
-          isActive: ch.isActive,
-        } : null,
-      };
-    });
-
-    res.json({
-      success: true,
-      game: { _id: game._id, name: game.name, groupLink: game.groupLink },
-      days: dayData,
-    });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Server error' });
   }
